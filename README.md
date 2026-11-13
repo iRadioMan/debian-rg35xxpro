@@ -144,9 +144,10 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
    `passwd` и `passwd gamer`.
 5. Проверьте сеть: `ip -br a`, `iw dev wlan0 link`. После появления IP можно зайти по SSH:
    `ssh root@<ip>`.
-6. `sh scripts/device-provision.sh` — идемпотентная настройка (пакеты, пользователь, PipeWire,
-   zram, запрет suspend, кнопки громкости, калибровка микшера). В образе она уже выполнена с
-   `--offline`; запускать вручную нужно только на старом образе или после ручных изменений.
+6. Повторный провижининг (пакеты, пользователь, PipeWire, zram, запрет suspend, кнопки громкости,
+   калибровка микшера): скопируйте `scripts/device-provision.sh` из репозитория на устройство
+   (`scp`/USB) и запустите `sh device-provision.sh`. Скрипт идемпотентен. В образе он уже выполнен
+   с `--offline`; вручную нужен только на старом образе или после ручных изменений.
 
 Если что-то не поднялось, выньте карту и прочитайте `boot-report.txt` в корне p1 — там `uname`,
 `/proc/cmdline`, сеть, `wpa_supplicant`, input-устройства и последние 300 строк журнала.
@@ -314,8 +315,8 @@ rootfs, образ), `config/dts/` (DTS платы), `config/patches/` (наши
 |Suspend|TF-A **2.12.0** + ROCKNIX `001-allwinner-h616-psci-system-suspend.patch` + SRAM-заглушка `h700-suspend-stub` (`712653d`, LPDDR3, 18 872 Б) вкомпилирована в BL31 (`SUNXI_SYSTEM_SUSPEND=1 SUNXI_SUSPEND_STUB=...`); BL31 65 641 Б, U-Boot пересобран, `strings bl31.bin` содержит `PSCI: System suspend available (SRAM stub %zu bytes, DRAM type %u @ %u MHz)`. Обновление до 2.15.0 **невозможно без портирования патча**: в 2.15 удалён `plat_psci_ops::pwr_domain_pwr_down_wfi`/`psci_power_down_wfi`, на которых он держится — ROCKNIX поэтому и пинит 2.12.0|
 
 Провижининг устройства (DNS, пакеты, пользователь `gamer`, PipeWire, zram, запрет suspend,
-power save off, кнопки громкости, калибровка микшера) — один идемпотентный скрипт, работает и на
-живом устройстве, и в chroot образа:
+power save off, кнопки громкости, калибровка микшера) — один идемпотентный скрипт из каталога
+репозитория; он работает и на живом устройстве (скрипт нужно туда скопировать), и в chroot образа:
 `sh scripts/device-provision.sh` / `sh scripts/device-provision.sh --offline`.
 
 ## Полевая диагностика (без клавиатуры и сети)
