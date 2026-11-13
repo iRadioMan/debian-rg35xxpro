@@ -137,7 +137,9 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
    - либо balenaEtcher.
 3. Вставьте карту в RG35XX Pro и включите питание. Загрузка идёт с p1 (`boot.scr` → `Image` + DTB).
 4. Логин в консоли на экране: `root` / `root`. Второй пользователь для аудиосессии:
-   `gamer` / `gamer`. Сразу смените пароли: `passwd` и `passwd gamer`.
+   `gamer` / `gamer`. Для ввода на самом устройстве нужна USB-клавиатура (OTG) либо UART
+   `ttyS0,115200`; иначе подключайтесь по SSH после настройки Wi-Fi. Сразу смените пароли:
+   `passwd` и `passwd gamer`.
 5. Проверьте сеть: `ip -br a`, `iw dev wlan0 link`. После появления IP можно зайти по SSH:
    `ssh root@<ip>`.
 6. `sh scripts/device-provision.sh` — идемпотентная настройка (пакеты, пользователь, PipeWire,
