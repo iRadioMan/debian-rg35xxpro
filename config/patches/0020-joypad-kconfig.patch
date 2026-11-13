@@ -1,0 +1,31 @@
+--- a/drivers/input/joystick/Kconfig
++++ b/drivers/input/joystick/Kconfig
+@@ -400,6 +400,18 @@
+ 	  Say Y here if you want enable support for the four
+ 	  built-in controller ports on the Nintendo 64 console.
+ 
++config JOYSTICK_ROCKNIX_SINGLEADC
++	tristate "ROCKNIX single-ADC gamepad with GPIO analog mux"
++	depends on OF
++	depends on IIO
++	help
++	  Say Y here to enable the ROCKNIX gamepad driver for handhelds whose
++	  analog sticks are multiplexed by GPIOs onto one ADC channel, such as
++	  the Anbernic RG35XX family (Allwinner H700).
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called rocknix-singleadc-joypad.
++
+ config JOYSTICK_SENSEHAT
+ 	tristate "Raspberry Pi Sense HAT joystick"
+ 	depends on INPUT && I2C
+--- a/drivers/input/joystick/Makefile
++++ b/drivers/input/joystick/Makefile
+@@ -29,6 +29,7 @@
+ obj-$(CONFIG_JOYSTICK_PXRC)		+= pxrc.o
+ obj-$(CONFIG_JOYSTICK_QWIIC)		+= qwiic-joystick.o
+ obj-$(CONFIG_JOYSTICK_SEESAW)		+= adafruit-seesaw.o
++obj-$(CONFIG_JOYSTICK_ROCKNIX_SINGLEADC)	+= rocknix-singleadc-joypad.o
+ obj-$(CONFIG_JOYSTICK_SENSEHAT)	+= sensehat-joystick.o
+ obj-$(CONFIG_JOYSTICK_SIDEWINDER)	+= sidewinder.o
+ obj-$(CONFIG_JOYSTICK_SPACEBALL)	+= spaceball.o

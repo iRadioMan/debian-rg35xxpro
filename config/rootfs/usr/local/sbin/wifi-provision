@@ -1,0 +1,24 @@
+#!/bin/sh
+# Apply Wi-Fi settings from the FAT boot partition. Any wifi.conf there overrides the baked-in config,
+# so networks can be changed by editing the card from a PC — no reflash needed.
+set -e
+CONF=/etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+SRC=/boot/firmware/wifi.conf
+[ -r "$SRC" ] || exit 0
+# shellcheck disable=SC1090
+. "$SRC"
+case "${WIFI_SSID:-}" in "" | "YOUR_SSID" | "CHANGEME") exit 0 ;; esac
+case "${WIFI_PSK:-}" in "" | "YOUR_PASSPHRASE" | "CHANGEME") exit 0 ;; esac
+umask 077
+block=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PSK") || exit 1
+{
+  echo "country=${WIFI_COUNTRY:-00}"
+  echo "ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev"
+  echo "update_config=1"
+  echo "powersave=0"
+  echo
+  # wpa_passphrase keeps the passphrase in a comment next to the hash; do not ship it twice.
+  printf '%s\n' "$block" | sed -n '/network={/,$p' | sed -e '/^[[:space:]]*#psk=/d'
+} > "$CONF"
+sync
+exit 0

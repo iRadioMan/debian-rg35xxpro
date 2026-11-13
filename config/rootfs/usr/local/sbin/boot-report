@@ -1,0 +1,25 @@
+#!/bin/sh
+# Dump boot + network state to the FAT boot partition (field diagnostics without a keyboard).
+[ -d /boot/firmware ] || exit 0
+mountpoint -q /boot/firmware || exit 0
+TMP=/boot/firmware/.boot-report.tmp
+OUT=/boot/firmware/boot-report.txt
+{
+  echo "=== generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ') uptime=$(cut -d' ' -f1 /proc/uptime) ==="
+  echo "--- uname ---"; uname -a
+  echo "--- cmdline ---"; cat /proc/cmdline
+  echo "--- ip ---"; ip -br a 2>&1
+  echo "--- iw dev ---"; iw dev 2>&1 | head -40
+  echo "--- iw link ---"; iw dev wlan0 link 2>&1 | head -20
+  echo "--- rfkill ---"; rfkill list 2>&1 | head -20
+  echo "--- regulatory ---"; iw reg get 2>&1 | head -20
+  echo "--- units ---"; systemctl is-active ssh systemd-networkd systemd-resolved wpa_supplicant@wlan0 2>&1
+  echo "--- wpa_supplicant cfg ---"; head -20 /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>&1
+  echo "--- usb ---"; lsusb 2>&1 | head -20
+  echo "--- input devices ---"; grep -E '^N:|^H:' /proc/bus/input/devices 2>&1 | head -40
+  echo "--- recent journal (300 lines) ---"
+  journalctl -b -n 300 --no-pager 2>&1
+} > "$TMP" 2>&1
+mv -f "$TMP" "$OUT"
+sync
+exit 0

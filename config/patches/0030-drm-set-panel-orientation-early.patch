@@ -1,0 +1,35 @@
+--- a/drivers/gpu/drm/sun4i/sun4i_rgb.c
++++ b/drivers/gpu/drm/sun4i/sun4i_rgb.c
+@@ -230,6 +230,16 @@
+ 
+ 		drm_connector_attach_encoder(&rgb->connector,
+ 						  &rgb->encoder);
++
++		/*
++		 * The panel driver sets this too, but only from get_modes(), i.e. after
++		 * drm_dev_register(): creating and attaching the connector property then trips
++		 * WARN_ON() in drm_mode_object.c (property added to a registered device) and
++		 * drm_object_attach_property() (connector already registered). Setting it here
++		 * keeps the property creation inside the unregistered window.
++		 */
++		drm_connector_set_orientation_from_panel(&rgb->connector,
++							 rgb->panel);
+ 	}
+ 
+ 	if (rgb->bridge) {
+--- a/drivers/gpu/drm/panel/panel-mipi.c
++++ b/drivers/gpu/drm/panel/panel-mipi.c
+@@ -665,10 +665,10 @@
+ 					 &mipi->bus_format, 1);
+ 
+ 	/*
+-	 * TODO: Remove once all drm drivers call
+-	 * drm_connector_set_orientation_from_panel()
++	 * The connector's orientation is set by the CRTC driver from .get_orientation()
++	 * before drm_dev_register(); calling drm_connector_set_panel_orientation() here
++	 * would add the property to an already registered connector and WARN.
+ 	 */
+-	drm_connector_set_panel_orientation(connector, mipi->orientation);
+ 
+ 	return count;
+ }

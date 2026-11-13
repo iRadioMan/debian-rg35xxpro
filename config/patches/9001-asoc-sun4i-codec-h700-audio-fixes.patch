@@ -1,0 +1,63 @@
+--- a/sound/soc/sunxi/sun4i-codec.c
++++ b/sound/soc/sunxi/sun4i-codec.c
+@@ -698,6 +698,10 @@
+ 					     hwrate);
+ }
+ 
++#ifdef CONFIG_PM_SLEEP
++static int sun4i_codec_resume_early(struct device *dev);
++#endif
++
+ static int sun4i_codec_startup(struct snd_pcm_substream *substream,
+ 			       struct snd_soc_dai *dai)
+ {
+@@ -706,8 +710,20 @@
+ 
+ 	int ret;
+ 
+-	if (scodec->clocks_suspended)
++	/*
++	 * A resume that failed part-way leaves clocks_suspended set. Retake the clocks here
++	 * (that is what resume_early does) instead of failing every later stream with -EIO,
++	 * which used to strand audio until the next reboot.
++	 */
++	if (scodec->clocks_suspended) {
++#ifdef CONFIG_PM_SLEEP
++		ret = sun4i_codec_resume_early(scodec->dev);
++		if (ret)
++			return ret;
++#else
+ 		return -EIO;
++#endif
++	}
+ 
+ 	/*
+ 	 * Stop issuing DRQ when we have room for less than 16 samples
+@@ -2036,7 +2052,16 @@
+ static const struct snd_soc_dapm_widget sun50i_h616_codec_card_dapm_widgets[] = {
+ 	SND_SOC_DAPM_HP("Headphone", NULL),
+ 	SND_SOC_DAPM_LINE("Line Out", NULL),
+-	SND_SOC_DAPM_SPK("Speaker", sun4i_codec_spk_event),
++	/*
++	 * The speaker amplifier sits between LINEOUT and the 74HC4052 analog mux that feeds
++	 * both the speaker and the headphone jack. It therefore belongs in series with
++	 * LINEOUT: gating it on the "Speaker" pin silenced the jack whenever headphones were
++	 * plugged in (the pin is powered down, but the signal still has to pass the amp).
++	 */
++	SND_SOC_DAPM_PGA_E("Speaker Amp", SND_SOC_NOPM, 0, 0, NULL, 0,
++			   sun4i_codec_spk_event,
++			   SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
++	SND_SOC_DAPM_SPK("Speaker", NULL),
+ };
+ 
+ /* Connect digital side enables to analog side widgets */
+@@ -2059,7 +2084,8 @@
+ 	{ "Line Out Source Playback Route", "Mono Differential", "Left Mixer" },
+ 	{ "Line Out Source Playback Route", "Mono Differential", "Right Mixer" },
+ 	{ "Line Out Ramp Controller", NULL, "Line Out Source Playback Route" },
+-	{ "LINEOUT", NULL, "Line Out Ramp Controller" },
++	{ "Speaker Amp", NULL, "Line Out Ramp Controller" },
++	{ "LINEOUT", NULL, "Speaker Amp" },
+ };
+ 
+ static struct snd_soc_card *sun50i_h616_codec_create_card(struct device *dev)

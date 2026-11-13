@@ -1,0 +1,4 @@
+// Remind the operator that the kernel is not managed by apt on this device.
+DPkg::Pre-Install-Pkgs {
+  "if dpkg-query -W -f='${Status}' linux-image-arm64 2>/dev/null | grep -q installed; then echo 'WARNING: a distro kernel got installed; this device boots /Image from the FAT partition'; fi";
+};

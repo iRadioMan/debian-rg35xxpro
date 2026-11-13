@@ -1,0 +1,18 @@
+[Unit]
+Description=RG35XX Pro codec mixer defaults (analog stages at 0 dB)
+Documentation=https://github.com/ROCKNIX/distribution
+After=alsa-restore.service sound.target
+Before=pipewire.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Line Out 0..31 = -43.5..0 dB and DAC 0..63 = -73.08..0 dB. Both at maximum, with the volume
+# left to PipeWire, is the only setting that does not double-attenuate or clip the speaker amp.
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5; do [ -e /dev/snd/controlC0 ] && break; sleep 0.4; done; \
+amixer -c 0 sset "Line Out" 31 unmute >/dev/null 2>&1 || true; \
+amixer -c 0 sset "DAC" 63 unmute >/dev/null 2>&1 || true; \
+amixer -c 0 sset "Line Out Source" "Stereo" >/dev/null 2>&1 || true'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh boot report on the boot partition
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=boot-report.service
+
+[Install]
+WantedBy=timers.target

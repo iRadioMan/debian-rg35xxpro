@@ -1,0 +1,18 @@
+--- a/drivers/input/joystick/rocknix-singleadc-joypad.c	2026-11-12 18:02:16.835761556 +0700
++++ b/drivers/input/joystick/rocknix-singleadc-joypad.c	2026-11-12 18:02:16.848004470 +0700
+@@ -229,7 +229,6 @@
+ 
+ };
+ 
+-extern struct input_dev * joypad_input_g;
+ 
+ static int pwm_vibrator_start(struct joypad *joypad)
+ {
+@@ -846,7 +845,6 @@
+ 
+ 	input->name = DRV_NAME;
+ 
+-	joypad_input_g = input;
+ 
+ 	device_property_read_string(dev, "joypad-name", &input->name);
+ 	input->phys = DRV_NAME"/input0";

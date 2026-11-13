@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/*
+ * Copyright (C) 2024 Ryan Walklin <ryan@testtoast.com>.
+ * Copyright (C) 2024 Chris Morgan <macroalpha82@gmail.com>.
+ */
+
+#include "sun50i-h700-anbernic-rg35xx-plus.dts"
+
+/ {
+	model = "Anbernic RG35XX Pro";
+	compatible = "anbernic,rg35xx-pro", "allwinner,sun50i-h700";
+	rocknix-dt-id = "sun50i-h700-anbernic-rg35xx-pro";
+};
+
+/* RG35XX Pro: LPDDR3, VDD_DRAM = 1.2 V */
+&reg_dcdc3 {
+	regulator-min-microvolt = <1200000>;
+	regulator-max-microvolt = <1200000>;
+};
+
+/* DE2 needs SRAM C1: sunxi_sram_claim() matches a section node, not the mmio-sram container */
+&sram_c {
+	de2_sram: sram-section@0 {
+		compatible = "allwinner,sun50i-h6-sram-c", "allwinner,sun50i-a64-sram-c";
+		reg = <0x0 0x30000>;
+	};
+};
+
+&{/soc/bus@1000000} {
+	allwinner,sram = <&de2_sram 1>;
+};
+
+/*
+ * Base node (sun50i-h700-anbernic-rg35xx-2024.dts, ROCKNIX patch 0140) already carries the full
+ * rocknix-singleadc-joypad description: GPIO buttons as child nodes, PI1/PI2 as analog mux select
+ * lines, gpadc channel 0 as "amux_adc". The Pro differs only in having the two sticks: four mux
+ * channels instead of none. Driver source: config/kernel/joypad, built in via
+ * CONFIG_JOYSTICK_ROCKNIX_SINGLEADC (config/patches/0020-joypad-kconfig.patch).
+ */
+&joypad {
+	amux-count = <4>;
+	/*
+	 * The base node exposes a PWM2 vibration motor. Rumble is out of scope for the input
+	 * bring-up, and a failed devm_pwm_get() aborts the whole probe (buttons included), so
+	 * the PWM properties are dropped until the motor is verified on this board.
+	 */
+	/delete-property/ pwms;
+	/delete-property/ pwm-names;
+};
+
+/*
+ * Crash capture: 1 MiB of reserved DRAM for ramoops. Without it a panic leaves nothing
+ * behind (console=tty0 only, no serial cable), and the default panic behaviour hangs the
+ * SoC instead of rebooting. boot.cmd passes panic=10 pstore.backend=ramoops.
+ */
+&{/reserved-memory} {
+	ramoops: ramoops@48000000 {
+		compatible = "ramoops";
+		reg = <0x0 0x48000000 0x0 0x100000>;
+		record-size = <0x20000>;
+		console-size = <0x80000>;
+		pmsg-size = <0x20000>;
+		ftrace-size = <0x0>;
+	};
+};
+
+/*
+ * Passive thermal throttling. sun50i-h616.dtsi declares 60/70 °C "passive" trips but no
+ * cooling-maps at all, so the trips are inert: measured 4-core load sat at 61–62 °C with the
+ * cpufreq cooling device at state 0 and the CPU pinned at 1416 MHz. Map both trips onto cpu0:
+ * THERMAL_NO_LIMIT at 60 °C lets step_wise use the whole OPP range, and 70 °C clamps it to
+ * states 2..4 (mid/low OPPs). The critical 110 °C trip is untouched.
+ */
+&{/thermal-zones/cpu-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_threshold>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+		map1 {
+			trip = <&cpu_target>;
+			cooling-device = <&cpu0 2 4>;
+		};
+	};
+};
+
+/*
+ * The h616 trips carry hysteresis = 0, so step_wise flaps between states on a 1 °C wobble
+ * (observed: state 3 at 60.0 °C -> 1200 MHz, state 1 at 61.2 °C -> 1416 MHz). 2 °C of
+ * hysteresis keeps the frequency steps apart.
+ */
+&{/thermal-zones/cpu-thermal/trips/cpu-trip-0} {
+	hysteresis = <2000>;
+};
+
+&{/thermal-zones/cpu-thermal/trips/cpu-trip-1} {
+	hysteresis = <2000>;
+};

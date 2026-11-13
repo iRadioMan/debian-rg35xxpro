@@ -1,0 +1,18 @@
+* text=auto
+
+# Everything that runs on the device or is patched into source trees must keep LF endings.
+*.sh text eol=lf
+build.sh text eol=lf
+*.md text eol=lf
+*.dts text eol=lf
+*.patch text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+config/wifi.env.example text eol=lf
+config/rootfs/** text eol=lf
+
+# Binary blobs copied verbatim into the image.
+*.bin binary
+*.panel binary
+*.db binary
+*.p7s binary

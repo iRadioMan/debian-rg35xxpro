@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply Wi-Fi settings from the boot partition
+After=local-fs.target
+Before=wpa_supplicant@wlan0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wifi-provision
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

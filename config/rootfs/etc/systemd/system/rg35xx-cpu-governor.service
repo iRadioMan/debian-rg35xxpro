@@ -1,0 +1,15 @@
+[Unit]
+Description=RG35XX Pro: schedutil CPU governor instead of the pinned performance default
+Documentation=file:///usr/local/share/rg35xxpro/README.md
+After=sysinit.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ROCKNIX's H700 config pins every policy to "performance" (1416 MHz always), which costs
+# battery and adds heat on a 1000 mAh handheld. schedutil scales 480..1416 MHz on demand.
+ExecStart=/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do [ -w "$p/scaling_governor" ] && echo schedutil > "$p/scaling_governor"; done'
+
+[Install]
+WantedBy=multi-user.target

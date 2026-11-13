@@ -1,0 +1,13 @@
+[Unit]
+Description=Dump boot and network state to the boot partition
+After=systemd-journald.service local-fs.target network.target
+Wants=systemd-journald.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/boot-report
+ExecStop=/usr/local/sbin/boot-report
+
+[Install]
+WantedBy=multi-user.target
