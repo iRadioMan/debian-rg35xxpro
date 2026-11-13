@@ -65,6 +65,11 @@ load_wifi() {
       break
     fi
   done
+  # Tolerate CRLF from editors on Windows; the values must not carry a stray \r into
+  # wpa_supplicant or /wifi.conf.
+  WIFI_SSID=${WIFI_SSID%$'\r'}
+  WIFI_PSK=${WIFI_PSK%$'\r'}
+  WIFI_COUNTRY=${WIFI_COUNTRY%$'\r'}
   WIFI_COUNTRY=${WIFI_COUNTRY:-00}
 }
 

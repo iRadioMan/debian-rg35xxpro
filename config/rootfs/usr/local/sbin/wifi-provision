@@ -7,6 +7,10 @@ SRC=/boot/firmware/wifi.conf
 [ -r "$SRC" ] || exit 0
 # shellcheck disable=SC1090
 . "$SRC"
+# Tolerate CRLF if wifi.conf was edited on Windows.
+WIFI_SSID=$(printf '%s' "${WIFI_SSID:-}" | tr -d '\r')
+WIFI_PSK=$(printf '%s' "${WIFI_PSK:-}" | tr -d '\r')
+WIFI_COUNTRY=$(printf '%s' "${WIFI_COUNTRY:-}" | tr -d '\r')
 case "${WIFI_SSID:-}" in "" | "YOUR_SSID" | "CHANGEME") exit 0 ;; esac
 case "${WIFI_PSK:-}" in "" | "YOUR_PASSPHRASE" | "CHANGEME") exit 0 ;; esac
 umask 077
