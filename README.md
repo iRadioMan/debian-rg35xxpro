@@ -27,8 +27,8 @@
 ## Быстрый старт
 
 ```sh
-git clone <URL-репозитория> Bebrian
-cd Bebrian
+git clone <URL-репозитория> debian-rg35xxpro
+cd debian-rg35xxpro
 
 # Необязательно: Wi-Fi, который будет уже прописан в образе.
 cp config/wifi.env.example config/wifi.env
