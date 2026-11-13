@@ -20,5 +20,6 @@ block=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PSK") || exit 1
   # wpa_passphrase keeps the passphrase in a comment next to the hash; do not ship it twice.
   printf '%s\n' "$block" | sed -n '/network={/,$p' | sed -e '/^[[:space:]]*#psk=/d'
 } > "$CONF"
+chmod 600 "$CONF"
 sync
 exit 0
