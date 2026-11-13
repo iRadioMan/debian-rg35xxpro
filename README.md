@@ -106,11 +106,11 @@ systemctl restart wpa_supplicant@wlan0.service
 
 ```sh
 rfkill unblock wifi
-wpa_cli -i wlan0 add_network
-wpa_cli -i wlan0 set_network 0 ssid '"MyNetwork"'
-wpa_cli -i wlan0 set_network 0 psk '"my passphrase"'
-wpa_cli -i wlan0 enable_network 0
-wpa_cli -i wlan0 select_network 0
+NET=$(wpa_cli -i wlan0 add_network)
+wpa_cli -i wlan0 set_network "$NET" ssid '"MyNetwork"'
+wpa_cli -i wlan0 set_network "$NET" psk '"my passphrase"'
+wpa_cli -i wlan0 enable_network "$NET"
+wpa_cli -i wlan0 select_network "$NET"
 wpa_cli -i wlan0 save_config
 systemctl restart systemd-networkd
 ```
