@@ -29,12 +29,31 @@ ls -l /etc/resolv.conf
 
 say "2. packages"
 export DEBIAN_FRONTEND=noninteractive
+# Games and ports are 64-bit, but a large part of the PortMaster catalogue ships armhf binaries;
+# the H700 kernel has CONFIG_COMPAT=y, so add the foreign architecture and the runtime libraries
+# those builds link against.
+dpkg --add-architecture armhf
 apt-get update
 apt-get install -y --no-install-recommends \
   alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber pulseaudio-utils \
   rtkit triggerhappy zram-tools \
   cage seatd earlyoom systemd-timesyncd \
-  libsdl2-2.0-0 libsdl2-ttf-2.0-0 fonts-dejavu-core glmark2-es2-wayland
+  libsdl2-2.0-0 libsdl2-ttf-2.0-0 fonts-dejavu-core \
+  retroarch libretro-core-info retroarch-assets python3 unzip zip \
+  labwc waybar pcmanfm foot imv mousepad firefox-esr audacious audacious-plugins smplayer mpv \
+  antimicro xwayland xauth swaybg fuzzel pavucontrol brightnessctl dialog bluez \
+  libspa-0.2-bluetooth udisks2 gvfs qtwayland5 xdg-utils desktop-file-utils shared-mime-info \
+  hicolor-icon-theme adwaita-icon-theme
+
+# 32-bit PortMaster runtimes: SDL2 stack, OpenAL, ALSA, GL/EGL/GBM and the X11 libraries some
+# ports still link against.
+apt-get install -y --no-install-recommends \
+  libc6:armhf libstdc++6:armhf libgcc-s1:armhf \
+  libsdl2-2.0-0:armhf libsdl2-image-2.0-0:armhf libsdl2-mixer-2.0-0:armhf \
+  libsdl2-ttf-2.0-0:armhf libopenal1:armhf libasound2t64:armhf \
+  libgl1:armhf libgl1-mesa-dri:armhf libegl1:armhf libgles2:armhf \
+  libgbm1:armhf libdrm2:armhf libx11-6:armhf libxext6:armhf libxrandr2:armhf \
+  libxcursor1:armhf libxi6:armhf libxinerama1:armhf libxss1:armhf libxxf86vm1:armhf
 
 say "3. unprivileged seat user"
 # pipewire/wireplumber user units carry ConditionUser=!root: under root they are skipped and
@@ -112,7 +131,9 @@ run systemctl enable triggerhappy.service
 
 say "7. zram (1 GB RAM device)"
 if [ -f /etc/default/zramswap ]; then
-  sed -i 's/^#\?PERCENT=.*/PERCENT=25/' /etc/default/zramswap
+  # 512 MiB of zram-backed swap on 1 GiB of RAM: a swapped-out frontend or browser tab costs
+  # CPU instead of an OOM kill, and it never touches the SD card.
+  sed -i 's/^#\?PERCENT=.*/PERCENT=50/' /etc/default/zramswap
   sed -i 's/^#\?ALGO=.*/ALGO=zstd/' /etc/default/zramswap
   grep -q '^SIZE=' /etc/default/zramswap && sed -i 's/^SIZE=.*/SIZE=/' /etc/default/zramswap
   run systemctl enable zramswap.service
@@ -141,20 +162,16 @@ run systemctl daemon-reload
 run systemctl enable --now rg35xx-cpu-governor.service
 
 # The journal is the main source of idle SD writes; systemd defaults to 10 % of the filesystem
-# (~800 MiB on this card). Cap it so logs cannot eat the card.
-mkdir -p /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/00-size.conf <<'EOF'
-[Journal]
-SystemMaxUse=64M
-SystemMaxFileSize=8M
-RuntimeMaxUse=16M
-EOF
+# (~800 MiB on this card). The caps (32 MiB, one week, 5 min sync) ship as an image overlay file,
+# config/rootfs/etc/systemd/journald.conf.d/00-size.conf; restart the daemon so a re-run picks up
+# an updated copy.
 run systemctl restart systemd-journald
 
 say "7c. Wayland seat + OOM policy"
-# The graphics stack stays installed (Mesa/Panfrost, Wayland, cage, glmark2), and seatd is enabled
-# so a compositor can be started by hand. Nothing graphical is started at boot: the default is a
-# text console on tty1.
+# The graphics stack (Mesa/Panfrost, Wayland, cage) stays installed and seatd is enabled so the
+# labwc desktop session (rg35xx-desktop.service) gets a seat for gamer (seatd runs with -g video
+# and gamer is in that group). What runs at boot is decided by the session contract, not here:
+# rg35xx-es.service is what multi-user.target pulls in.
 run systemctl enable --now seatd
 # --offline skips the line above, so make the enablement explicit for the image build too.
 for u in seatd earlyoom; do
@@ -169,10 +186,11 @@ printf '# zram-backed swap is free to use: prefer anonymous pages there instead 
 run sysctl -q -p /etc/sysctl.d/99-rg35xxpro-zram.conf
 
 # Kernel OOM kills the whole cgroup late and takes the session with it; earlyoom kills the
-# largest offender (the emulator) first and leaves systemd/sshd/PipeWire alive.
+# largest offender (the emulator, the browser) first and leaves systemd/sshd/PipeWire/the
+# session alive, so the device stays reachable and can be restarted from the shell.
 mkdir -p /etc/default
 cat > /etc/default/earlyoom <<'EOF'
-EARLYOOM_ARGS="-m 10 -s 5 -r 60 --avoid (^|/)(systemd|sshd|pipewire|wireplumber|dbus-daemon)$ --prefer (^|/)(retroarch|ppsspp|dolphin|flycast|sway|cage|glmark2)"
+EARLYOOM_ARGS="-m 10 -s 5 -r 60 --prefer (^|/)(firefox|firefox-esr|smplayer|mpv|audacious|es-de|retroarch|pugwash|ppsspp|dolphin|flycast)$ --avoid (^|/)(systemd|sshd|pipewire|wireplumber|dbus-daemon|labwc|waybar|foot|pcmanfm|seatd)$"
 EOF
 run systemctl enable --now earlyoom
 

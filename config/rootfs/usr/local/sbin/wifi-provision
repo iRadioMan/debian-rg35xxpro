@@ -15,6 +15,9 @@ case "${WIFI_SSID:-}" in "" | "YOUR_SSID" | "CHANGEME") exit 0 ;; esac
 case "${WIFI_PSK:-}" in "" | "YOUR_PASSPHRASE" | "CHANGEME") exit 0 ;; esac
 umask 077
 block=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PSK") || exit 1
+# Stage next to the destination (same filesystem, so mv is atomic) and only write when the content
+# actually changes: rewriting an identical config on every boot is a pointless SD write.
+tmp=$(mktemp /etc/wpa_supplicant/.wpa_supplicant-wlan0.XXXXXX)
 {
   echo "country=${WIFI_COUNTRY:-00}"
   echo "ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev"
@@ -23,7 +26,12 @@ block=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PSK") || exit 1
   echo
   # wpa_passphrase keeps the passphrase in a comment next to the hash; do not ship it twice.
   printf '%s\n' "$block" | sed -n '/network={/,$p' | sed -e '/^[[:space:]]*#psk=/d'
-} > "$CONF"
-chmod 600 "$CONF"
+} > "$tmp"
+if cmp -s "$tmp" "$CONF"; then
+  rm -f "$tmp"
+  exit 0
+fi
+chmod 600 "$tmp"
+mv -f "$tmp" "$CONF"
 sync
 exit 0

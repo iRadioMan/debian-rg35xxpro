@@ -1,0 +1,24 @@
+#!/bin/bash
+# ExecStart of rg35xx-game.service: run whatever the frontend asked for, from the argv that
+# rg35xx-run-sh or the `retroarch` shim parked in /run/rg35xx/game.args.
+#
+#   --sh <script> <workdir>   port script (PortMaster / ES-DE ports entry)
+#   <command> [args...]       regular command (RetroArch, ...)
+#
+# bash, not sh: mapfile -d '' is the only reliable way to read NUL-separated argv.
+set -eu
+
+args=/run/rg35xx/game.args
+if [ ! -s "$args" ]; then
+  echo "rg35xx-game-exec: $args is missing or empty; nothing to run" >&2
+  exit 1
+fi
+
+mapfile -d '' -t a < "$args"
+
+if [ "${a[0]:-}" = "--sh" ]; then
+  cd "${a[2]}"
+  exec /bin/bash "${a[1]}"
+fi
+
+exec "${a[@]}"

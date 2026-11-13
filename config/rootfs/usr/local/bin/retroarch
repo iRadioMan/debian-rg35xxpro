@@ -1,0 +1,17 @@
+#!/bin/sh
+# `retroarch` shim, earlier in PATH than /usr/bin/retroarch.
+#
+# ES-DE is a 640x480 KMS/DRM client; RetroArch cannot become DRM master next to it and the device
+# has no RAM for both. So a RetroArch launch requested *by the frontend* is turned into a real
+# session switch: the argv is parked in /run/rg35xx/game.args and rg35xx-game.service replays it
+# with ES-DE stopped. Calls from anywhere else (a game already running, shell, SSH) execute
+# /usr/bin/retroarch unchanged.
+set -eu
+
+if [ "${RG35XX_IN_GAME:-0}" = 1 ] || [ "${RG35XX_ES_SESSION:-0}" != 1 ]; then
+  exec /usr/bin/retroarch "$@"
+fi
+
+printf '%s\0' /usr/bin/retroarch "$@" > /run/rg35xx/game.args
+chmod 0644 /run/rg35xx/game.args
+exec sudo -n /usr/local/bin/rg35xx-session game

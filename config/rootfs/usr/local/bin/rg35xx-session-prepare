@@ -1,0 +1,23 @@
+#!/bin/sh
+# ExecStartPre=+ for rg35xx-es.service, rg35xx-desktop.service and rg35xx-terminal.service:
+# drop everything the new session does not need and hand the freed page cache back.
+set -eu
+
+mode=${1:-}
+case "$mode" in
+  es | desktop | terminal) ;;
+  *)
+    echo "usage: rg35xx-session-prepare es|desktop|terminal" >&2
+    exit 2
+    ;;
+esac
+
+# Bluetooth is only used by the desktop (keyboard/mouse) and by nothing in ES, on the console or
+# under a game; bluez keeps a daemon plus its page cache resident for no reason there.
+if [ "$mode" != desktop ]; then
+  systemctl stop bluetooth.service 2>/dev/null || true
+fi
+
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+exit 0

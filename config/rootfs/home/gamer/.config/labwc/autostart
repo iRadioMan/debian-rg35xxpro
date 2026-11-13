@@ -1,0 +1,6 @@
+#!/bin/sh
+# Started by labwc once the compositor is up. Blocking for the last one is fine: nothing else
+# needs to run after the session is populated.
+waybar &
+pcmanfm --desktop &
+swaybg -c '#1e1e2e' &

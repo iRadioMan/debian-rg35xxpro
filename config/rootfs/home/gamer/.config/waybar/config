@@ -1,0 +1,41 @@
+{
+  "layer": "top",
+  "position": "top",
+  "height": 28,
+  "spacing": 4,
+  "modules-left": ["custom/menu"],
+  "modules-center": ["clock"],
+  "modules-right": ["pulseaudio", "custom/net", "custom/bat", "custom/settings"],
+  "custom/menu": {
+    "format": "Menu",
+    "tooltip": false,
+    "on-click": "fuzzel"
+  },
+  "clock": {
+    "format": "{:%H:%M}",
+    "tooltip": false
+  },
+  "pulseaudio": {
+    "format": "vol {volume}%",
+    "format-muted": "vol mute",
+    "tooltip": false,
+    "on-click": "pavucontrol"
+  },
+  "custom/net": {
+    "exec": "rg35xx-net-status",
+    "interval": 10,
+    "format": "{}",
+    "tooltip": false
+  },
+  "custom/bat": {
+    "exec": "rg35xx-battery",
+    "interval": 30,
+    "format": "{}",
+    "tooltip": false
+  },
+  "custom/settings": {
+    "format": "Settings",
+    "tooltip": false,
+    "on-click": "rg35xx-settings"
+  }
+}

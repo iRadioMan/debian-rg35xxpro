@@ -1,0 +1,34 @@
+#!/bin/sh
+# Switch the RG35XX Pro between its mutually exclusive sessions.
+#
+#   rg35xx-session es|desktop|terminal|game|poweroff|reboot
+#
+# Runs as root (the gamer user has NOPASSWD sudo). The requested mode is recorded in
+# /run/rg35xx/target first: the ExecStopPost helper of the session that is being torn down reads
+# it to decide whether it may start a replacement session or must stay quiet.
+set -eu
+
+mode=${1:-}
+case "$mode" in
+  es | desktop | terminal | game | poweroff | reboot) ;;
+  *)
+    echo "usage: rg35xx-session es|desktop|terminal|game|poweroff|reboot" >&2
+    exit 2
+    ;;
+esac
+
+mkdir -p /run/rg35xx
+printf '%s\n' "$mode" > /run/rg35xx/target
+chmod 0644 /run/rg35xx/target
+
+# --no-block everywhere: this command is normally invoked from *inside* the session that the
+# start job will stop (ES quit script, desktop menu), and a blocking client would be killed by
+# its own cgroup stop before the job it waits for can finish.
+case "$mode" in
+  es)       exec systemctl --no-block start rg35xx-es.service ;;
+  desktop)  exec systemctl --no-block start rg35xx-desktop.service ;;
+  terminal) exec systemctl --no-block start rg35xx-terminal.service ;;
+  game)     exec systemctl --no-block start rg35xx-game.service ;;
+  poweroff) exec systemctl poweroff ;;
+  reboot)   exec systemctl reboot ;;
+esac

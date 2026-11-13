@@ -5,13 +5,14 @@
 #   sudo ./build.sh --deps       # only install host packages
 #   sudo ./build.sh kernel image # run/re-run selected stages
 #
-# Stages: deps sources atf uboot kernel rootfs image
+# Stages: deps sources atf uboot kernel rootfs frontend image
 # Work happens in $BUILD_DIR (default /var/tmp/rg35xxpro-build); artifacts land in ./out.
 #
-# Everything the device needs comes from four pinned upstreams plus this repository:
+# Everything the device needs comes from pinned upstreams plus this repository:
 #   Linux 7.1.2, U-Boot v2026.01, TF-A v2.12.0 + ROCKNIX PSCI-suspend patch, the H700 SRAM
-#   suspend stub, ROCKNIX tag 20261101 (DTS + patches), Debian 13 (trixie) arm64 rootfs, and
-#   config/ (our DTS, our patches, rootfs overlay).
+#   suspend stub, ROCKNIX tag 20261101 (DTS + patches), Debian 13 (trixie) arm64 rootfs,
+#   ES-DE 3.5.0 built from source for GLES2/KMS, the libretro buildbot cores pinned by hash,
+#   the PortMaster release, and config/ (our DTS, patches, rootfs overlay).
 set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -32,6 +33,18 @@ ATF_SHA256=d95aaf292792c98035910d7e6c64ebfb297c897fef510415db1612f6d39f9223
 STUB_VER=712653d11230b2450061ddb8e25f31e072da7a48
 STUB_SHA256=3698da9aad40c26c10f6aa31f8366158914e0a351d31f1084c6b8032147f4616
 
+# Frontend: ES-DE upstream (not the ROCKNIX fork: it does not depend on /storage or sway and
+# builds straight for KMS/GLES), libretro cores from the buildbot, PortMaster release.
+ES_DE_VER=3.5.0
+ES_DE_SHA256=3f35aaebaf65ab267d347d0957028af50e0413323277f8ae2b74fcfb836c6f7f
+ES_DE_URL=https://gitlab.com/es-de/emulationstation-de/-/archive/v$ES_DE_VER/emulationstation-de-v$ES_DE_VER.tar.gz
+# Core zips are pinned individually in config/retroarch-cores.sha256: the buildbot's "latest"
+# directory is rebuilt continuously, so a checksum failure means "refresh the hashes", not "skip".
+CORES_URL=https://buildbot.libretro.com/nightly/linux/aarch64/latest
+PM_VER=2026-11-02_1442
+PM_SHA256=b7a221c8a580a173bc6eb9bb7ec9ec2f616f2bfa37c0f95c127347954120aa11
+PM_URL=https://github.com/PortsMaster/PortMaster-New/releases/download/$PM_VER/PortMaster.zip
+
 LINUX_DIR=$BUILD_DIR/linux-$LINUX_VER
 UBOOT_DIR=$BUILD_DIR/u-boot-$UBOOT_VER
 ATF_DIR=$BUILD_DIR/trusted-firmware-a-$ATF_VER
@@ -46,6 +59,14 @@ IMG_NAME=rg35xxpro-debian.img
 
 log() { printf '\n=== %s ===\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# fetch <url> <sha256> <file>: reuse a cached download that still matches, otherwise download and
+# verify. Any mismatch aborts the build; no tarball is ever used unverified.
+fetch() {
+  [ -s "$3" ] && [ "$(sha256sum "$3" | cut -d' ' -f1)" = "$2" ] && { echo "ok $(basename "$3")"; return; }
+  echo "fetch $1"; curl -fL --retry 3 -o "$3" "$1"
+  echo "$2  $3" | sha256sum -c - || die "checksum mismatch for $3"
+}
 
 [ "$(id -u)" = 0 ] || die "run as root (debootstrap/chroot); try: sudo $0 $*"
 
@@ -115,7 +136,7 @@ stage_deps() {
     device-tree-compiler u-boot-tools \
     debootstrap qemu-user-static binfmt-support \
     dosfstools mtools fdisk gdisk parted e2fsprogs rsync \
-    wget curl xz-utils git ca-certificates file zstd \
+    wget curl xz-utils git ca-certificates file zstd unzip \
     libgnutls28-dev swig pkg-config wpasupplicant \
     linux-firmware
   # /lib/firmware pieces the kernel embeds (CONFIG_EXTRA_FIRMWARE)
@@ -129,11 +150,6 @@ stage_sources() {
   log "sources in $BUILD_DIR"
   mkdir -p "$BUILD_DIR" "$OUT"
 
-  fetch() { # url sha256 file
-    [ -s "$3" ] && [ "$(sha256sum "$3" | cut -d' ' -f1)" = "$2" ] && { echo "ok $3"; return; }
-    echo "fetch $1"; curl -fL --retry 3 -o "$3" "$1"
-    echo "$2  $3" | sha256sum -c - || die "checksum mismatch for $3"
-  }
   cd "$BUILD_DIR"
   fetch "https://cdn.kernel.org/pub/linux/kernel/v${LINUX_VER%%.*}.x/linux-$LINUX_VER.tar.xz" \
         "$LINUX_SHA256" "linux-$LINUX_VER.tar.xz"
@@ -326,12 +342,12 @@ EOF
     libnss-mdns kbd console-setup usbutils evtest kmod ca-certificates curl nano sudo udev \
     mesa-utils mesa-utils-extra libgl1-mesa-dri libegl1 libgles2 libgbm1 libdrm-tests kmscube \
     wireless-regdb alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber \
-    pulseaudio-utils rtkit triggerhappy zram-tools
+    pulseaudio-utils rtkit triggerhappy zram-tools unzip
 
   log "base configuration"
   echo "rg35xxpro" > "$ROOTFS/etc/hostname"
   printf '127.0.0.1\tlocalhost\n127.0.1.1\trg35xxpro\n' > "$ROOTFS/etc/hosts"
-  printf '/dev/mmcblk0p2\t/\text4\tdefaults,noatime\t0 1\n/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,nofail\t0 2\n' \
+  printf '/dev/mmcblk0p2\t/\text4\tdefaults,noatime,commit=120,errors=remount-ro\t0 1\n/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,noatime,nofail\t0 2\ntmpfs\t/tmp\ttmpfs\tdefaults,noatime,nosuid,nodev,size=256M,mode=1777\t0 0\n' \
     > "$ROOTFS/etc/fstab"
   echo 'root:root' | chroot "$ROOTFS" chpasswd
 
@@ -339,7 +355,12 @@ EOF
   ( cd "$CFG/rootfs" && find . -type f -print0 | while IFS= read -r -d '' f; do
       install -D -m 0644 "./$f" "$ROOTFS/${f#./}"
     done )
-  chmod 0755 "$ROOTFS/usr/local/sbin/boot-report" "$ROOTFS/usr/local/sbin/wifi-provision"
+  # The overlay lands 0644; restore what has to be executable or unreadable by others.
+  find "$ROOTFS/usr/local/bin" "$ROOTFS/usr/local/sbin" -type f -exec chmod 0755 {} +
+  find "$ROOTFS/roms" -name '*.sh' -exec chmod 0755 {} +
+  find "$ROOTFS/home/gamer/ES-DE/scripts" -name '*.sh' -exec chmod 0755 {} +
+  chmod 0755 "$ROOTFS/home/gamer/.config/labwc/autostart"
+  chmod 0440 "$ROOTFS/etc/sudoers.d/10-rg35xx"
 
   log "wpa_supplicant config (config/wifi.env)"
   load_wifi
@@ -356,11 +377,20 @@ EOF
     /bin/sh /tmp/device-provision.sh --offline
   rm -f "$ROOTFS/tmp/device-provision.sh"
 
+  log "roms tree"
+  # One directory per system ES-DE is configured for, plus the ports and desktop entries.
+  for d in ports desktop nes snes gb gbc gba genesis psx n64 nds arcade pcengine ngp \
+           wonderswan virtualboy amiga c64 dos scummvm dreamcast psp 3do atari2600 atari7800; do
+    install -d -o 1000 -g 1000 "$ROOTFS/roms/$d"
+  done
+  # gamer owns its home and the ROM tree; device-provision.sh created the user above.
+  chown -R 1000:1000 "$ROOTFS/home/gamer" "$ROOTFS/roms"
+
   log "enable units"
   for u in ssh.service systemd-networkd.service systemd-resolved.service \
            wpa_supplicant@wlan0.service wifi-provision.service wifi-powersave-off.service \
-           boot-report.timer avahi-daemon.service triggerhappy.service zramswap.service \
-           rg35xx-codec-defaults.service getty@tty1.service; do
+           boot-report.timer fstrim.timer avahi-daemon.service triggerhappy.service \
+           zramswap.service rg35xx-codec-defaults.service rg35xx-es.service; do
     dst=$ROOTFS/etc/systemd/system/$(dirname "$u").wants
     case "$u" in
       *.timer) dst=$ROOTFS/etc/systemd/system/timers.target.wants ;;
@@ -376,6 +406,10 @@ EOF
       echo "WARNING: unit $u not found"
     fi
   done
+  # tty1 belongs to the session contract (ES-DE, labwc, or getty started on demand by
+  # rg35xx-terminal.service). A boot-time getty there would grab the VT and race the DRM client.
+  rm -f "$ROOTFS/etc/systemd/system/getty.target.wants/getty@tty1.service" \
+        "$ROOTFS/etc/systemd/system/multi-user.target.wants/getty@tty1.service"
   mkdir -p "$ROOTFS/var/lib/systemd/linger" && touch "$ROOTFS/var/lib/systemd/linger/gamer"
   mkdir -p "$ROOTFS/etc/systemd/user/default.target.wants" \
            "$ROOTFS/etc/systemd/user/sockets.target.wants" \
@@ -396,6 +430,210 @@ EOF
   rm -f "$ROOTFS/etc/resolv.conf"
   ln -sfn /run/systemd/resolve/stub-resolv.conf "$ROOTFS/etc/resolv.conf"
   mkdir -p "$ROOTFS/boot/firmware"
+  du -sh "$ROOTFS"
+}
+
+# ---------------------------------------------------------------- frontend
+# ES-DE 3.5.0 (built inside the rootfs under qemu-user, GLES2 + KMS), the libretro cores from the
+# buildbot, and the PortMaster release. Everything lands in $ROOTFS, so the rootfs stage must have
+# run first. Build dependencies are installed and purged in this stage only: the image keeps the
+# runtime libraries, not a compiler.
+stage_frontend() {
+  log "frontend: ES-DE $ES_DE_VER, libretro cores, PortMaster"
+  [ -x "$ROOTFS/usr/bin/apt-get" ] || die "rootfs stage has not run yet ($ROOTFS)"
+
+  local libretro=$ROOTFS/usr/lib/aarch64-linux-gnu/libretro
+  local cores_sum es_deps systems
+  cores_sum=$(sha256sum "$CFG/retroarch-cores.sha256" | cut -d' ' -f1)
+  # Installed for the build, purged afterwards; listed once so install and purge cannot diverge.
+  es_deps="build-essential cmake gettext libharfbuzz-dev libicu-dev libsdl2-dev \
+libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libfreeimage-dev libfreetype-dev \
+libgit2-dev libcurl4-openssl-dev libpugixml-dev libasound2-dev libbluetooth-dev libgl1-mesa-dev \
+libgles-dev libegl-dev libpoppler-cpp-dev"
+
+  # The rootfs stage deletes its qemu copy in cleanup; cmake/make/dpkg/ldd inside the chroot need it.
+  install -m 0755 /usr/bin/qemu-aarch64-static "$ROOTFS/usr/bin/qemu-aarch64-static"
+
+  if [ "$(cat "$ROOTFS/etc/rg35xx-cores.version" 2>/dev/null || true)" != "$cores_sum" ]; then
+    log "libretro cores from $CORES_URL"
+    mkdir -p "$libretro"
+    while read -r sha core; do
+      case "${core:-}" in '' | '#'*) continue ;; esac
+      fetch "$CORES_URL/${core}_libretro.so.zip" "$sha" "$BUILD_DIR/core-$core.zip"
+      unzip -o -j -q "$BUILD_DIR/core-$core.zip" -d "$libretro"
+    done < "$CFG/retroarch-cores.sha256"
+    chmod 0644 "$libretro"/*.so
+    printf '%s\n' "$cores_sum" > "$ROOTFS/etc/rg35xx-cores.version"
+    ls -l "$libretro" | tail -5
+  fi
+
+  if [ "$(cat "$ROOTFS/etc/rg35xx-es-de.version" 2>/dev/null || true)" != "$ES_DE_VER" ]; then
+    log "ES-DE build dependencies"
+    chroot "$ROOTFS" apt-get update
+    # shellcheck disable=SC2086
+    chroot "$ROOTFS" apt-get install -y --no-install-recommends $es_deps
+
+    log "ES-DE $ES_DE_VER sources"
+    fetch "$ES_DE_URL" "$ES_DE_SHA256" "$BUILD_DIR/emulationstation-de-v$ES_DE_VER.tar.gz"
+    rm -rf "$ROOTFS/tmp/es-de-src" "$ROOTFS/tmp/es-de-build"
+    tar xf "$BUILD_DIR/emulationstation-de-v$ES_DE_VER.tar.gz" -C "$ROOTFS/tmp"
+    mv "$ROOTFS/tmp/emulationstation-de-v$ES_DE_VER" "$ROOTFS/tmp/es-de-src"
+
+    log "ES-DE build"
+    # -j2, not -j$JOBS: every compiler process runs emulated by qemu-user, and one aarch64 gcc
+    # easily costs a few hundred MiB of host RAM.
+    # COMPILE_LOCALIZATIONS stays ON (the default): without the compiled .mo files ES-DE logs
+    # "Program resource missing ... locale/<lang>/LC_MESSAGES/<lang>.mo", calls it critical and
+    # performs an emergency shutdown before the first window.
+    chroot "$ROOTFS" cmake -S /tmp/es-de-src -B /tmp/es-de-build \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+      -DGLES=ON -DDEINIT_ON_LAUNCH=ON -DAPPLICATION_UPDATER=OFF \
+      -DVIDEO_HW_DECODING=OFF
+    chroot "$ROOTFS" make -C /tmp/es-de-build -j2
+    chroot "$ROOTFS" make -C /tmp/es-de-build install
+
+    # `make install` brings three themes (linear-es-de, modern-es-de, slate-es-de, 68 MiB total).
+    # We use linear-es-de: it is the theme ES-DE falls back to by itself and it carries
+    # aspect-ratio-4-3.xml, which is what this 640x480 panel needs. Drop the other two.
+    log "themes: keep linear-es-de (4:3), drop the rest"
+    themes=$ROOTFS/usr/share/es-de/themes
+    test -s "$themes/linear-es-de/theme.xml" || die "linear-es-de theme was not installed"
+    test -s "$themes/linear-es-de/capabilities.xml" ||
+      die "linear-es-de has no capabilities.xml, ES-DE would ignore it"
+    for t in "$themes"/*; do
+      case "$(basename "$t")" in linear-es-de) continue ;; esac
+      echo "removing theme $(basename "$t")"
+      rm -rf "$t"
+    done
+
+    log "runtime libraries -> apt-mark manual"
+    cat > "$ROOTFS/tmp/rg35xx-mark-manual.sh" <<'EOS'
+#!/bin/sh
+# Everything ES-DE and the cores link against has to survive the purge of the build dependencies,
+# so mark the owning packages manual before autoremove gets a chance to drop them.
+set -e
+list=/tmp/rg35xx-runtime-libs
+for f in /usr/bin/es-de /usr/lib/*/libretro/*.so; do
+  if [ -e "$f" ]; then ldd "$f" 2>/dev/null; fi
+done | sed -n 's/^.*=> \(\/usr\/[^ ]*\).*$/\1/p' | sort -u > "$list"
+xargs -r dpkg -S < "$list" | cut -d: -f1 | sort -u | xargs -r apt-mark manual
+rm -f "$list"
+EOS
+    chroot "$ROOTFS" /bin/sh /tmp/rg35xx-mark-manual.sh
+    rm -f "$ROOTFS/tmp/rg35xx-mark-manual.sh"
+
+    log "purge build dependencies"
+    # shellcheck disable=SC2086
+    chroot "$ROOTFS" apt-get purge -y $es_deps
+    chroot "$ROOTFS" apt-get autoremove -y
+    chroot "$ROOTFS" apt-get clean
+
+    log "ES-DE verification"
+    chroot "$ROOTFS" /usr/bin/es-de --version
+    if chroot "$ROOTFS" /bin/sh -c 'ldd /usr/bin/es-de /usr/lib/*/libretro/*.so | grep -q "not found"'; then
+      chroot "$ROOTFS" /bin/sh -c 'ldd /usr/bin/es-de /usr/lib/*/libretro/*.so | grep "not found"'
+      die "ES-DE or a core is missing runtime libraries after the purge"
+    fi
+    printf '%s\n' "$ES_DE_VER" > "$ROOTFS/etc/rg35xx-es-de.version"
+  fi
+
+  log "es_systems.xml: ports through rg35xx-run-sh, arcade through FinalBurn Neo"
+  # ES-DE picks resources/systems/<platform>/ at runtime: linuxarm on AArch64 (SystemData.cpp).
+  # The generic linux/ directory is for x86-64 machines and is not what this image loads.
+  systems=$ROOTFS/usr/share/es-de/resources/systems/linuxarm/es_systems.xml
+  [ -s "$systems" ] || systems=$(find "$ROOTFS/usr/share/es-de" -path '*/systems/linuxarm/es_systems.xml' | head -1)
+  [ -n "$systems" ] && [ -s "$systems" ] || die "linuxarm es_systems.xml not found under $ROOTFS/usr/share/es-de"
+  python3 - "$systems" <<'PY'
+import sys
+
+# ES-DE runs a `ports` entry itself, which means the frontend keeps the DRM device and ~150 MiB
+# while the port runs. Hand the entry to rg35xx-run-sh instead: it parks the argv and switches to
+# rg35xx-game.service, so the port starts with the frontend stopped.
+PORT_COMMAND = '%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%'
+REPLACEMENT = '<command label="Shortcut or script">/usr/local/bin/rg35xx-run-sh %ROM%</command>'
+# The image ships no MAME core (112 MiB); FinalBurn Neo is the only arcade core available, so it
+# has to be the default choice for arcade and the CPS systems.
+FBNEO_SYSTEMS = ('arcade', 'cps', 'cps1', 'cps2', 'cps3')
+
+path = sys.argv[1]
+
+
+def system_name(block):
+    for line in block:
+        stripped = line.strip()
+        if stripped.startswith('<name>'):
+            return stripped[len('<name>'):-len('</name>')]
+    return ''
+
+
+def fix_block(block, name):
+    if name == 'ports':
+        for i, line in enumerate(block):
+            if '<command ' in line and PORT_COMMAND in line:
+                indent = line[:len(line) - len(line.lstrip())]
+                block[i] = indent + REPLACEMENT
+                break
+    if name in FBNEO_SYSTEMS:
+        commands = [i for i, line in enumerate(block) if '<command ' in line]
+        fbneo = [i for i in commands if 'fbneo_libretro.so' in block[i]]
+        if fbneo and commands[0] != fbneo[0]:
+            block.insert(commands[0], block.pop(fbneo[0]))
+    return block
+
+
+with open(path, encoding='utf-8') as handle:
+    lines = handle.read().splitlines()
+
+result = []
+i = 0
+while i < len(lines):
+    if lines[i].strip() == '<system>':
+        end = i + 1
+        while end < len(lines) and lines[end].strip() != '</system>':
+            end += 1
+        block = fix_block(lines[i:end + 1], system_name(lines[i:end + 1]))
+        result.extend(block)
+        i = end + 1
+        continue
+    result.append(lines[i])
+    i += 1
+
+with open(path, 'w', encoding='utf-8') as handle:
+    handle.write('\n'.join(result) + '\n')
+PY
+  grep -A8 '<name>ports</name>' "$systems" | grep -q 'rg35xx-run-sh' ||
+    die "ports system was not patched to rg35xx-run-sh"
+  for s in arcade cps cps1 cps2 cps3; do
+    awk -v s="<name>$s</name>" 'index($0, s) { found = 1 } found && /<command / { print; exit }' "$systems" |
+      grep -q 'fbneo_libretro.so' || die "$s still prefers a core the image does not ship"
+  done
+
+  # ES-DE resolves %CORE_RETROARCH% through es_find_rules.xml. The linuxarm variant already lists
+  # /usr/lib/aarch64-linux-gnu/libretro, which is where this image keeps the cores; the x86-64
+  # linux/ variant does not and is irrelevant here. Fail loudly if a future ES-DE drops the entry:
+  # without it no core is ever found and every game launch fails.
+  rules=$ROOTFS/usr/share/es-de/resources/systems/linuxarm/es_find_rules.xml
+  [ -s "$rules" ] || rules=$(find "$ROOTFS/usr/share/es-de" -path '*/systems/linuxarm/es_find_rules.xml' | head -1)
+  grep -q '<entry>/usr/lib/aarch64-linux-gnu/libretro</entry>' "$rules" 2>/dev/null ||
+    die "es_find_rules.xml (linuxarm) does not list /usr/lib/aarch64-linux-gnu/libretro"
+
+  log "PortMaster $PM_VER"
+  if [ "$(cat "$ROOTFS/etc/rg35xx-portmaster.version" 2>/dev/null || true)" != "$PM_VER" ]; then
+    fetch "$PM_URL" "$PM_SHA256" "$BUILD_DIR/PortMaster-$PM_VER.zip"
+    unzip -q -o "$BUILD_DIR/PortMaster-$PM_VER.zip" -d "$ROOTFS/roms/ports"
+    printf '%s\n' "$PM_VER" > "$ROOTFS/etc/rg35xx-portmaster.version"
+  fi
+  # The release ships its own controller DB without the H700 line, so PortMaster's
+  # SDL_GAMECONTROLLERCONFIG lookup would come up empty. Keep the overlay's copy on top.
+  install -m 0644 "$CFG/rootfs/roms/ports/PortMaster/gamecontrollerdb.txt" \
+    "$ROOTFS/roms/ports/PortMaster/gamecontrollerdb.txt"
+  find "$ROOTFS/roms/ports" -name '*.sh' -exec chmod 0755 {} +
+  chown -R 1000:1000 "$ROOTFS/roms" "$ROOTFS/home/gamer"
+
+  log "frontend cleanup"
+  rm -rf "$ROOTFS/tmp/es-de-src" "$ROOTFS/tmp/es-de-build"
+  rm -f "$ROOTFS/usr/bin/qemu-aarch64-static"
+  rm -rf "$ROOTFS"/var/lib/apt/lists/*
   du -sh "$ROOTFS"
 }
 
@@ -468,11 +706,11 @@ for a in "$@"; do
   case "$a" in
     --deps|deps) STAGES+=(deps) ;;
     --help|-h) sed -n '2,15p' "$0"; exit 0 ;;
-    sources|atf|uboot|kernel|rootfs|image) STAGES+=("$a") ;;
+    sources|atf|uboot|kernel|rootfs|frontend|image) STAGES+=("$a") ;;
     *) die "unknown stage: $a" ;;
   esac
 done
-[ ${#STAGES[@]} -gt 0 ] || STAGES=(deps sources atf uboot kernel rootfs image)
+[ ${#STAGES[@]} -gt 0 ] || STAGES=(deps sources atf uboot kernel rootfs frontend image)
 
 for s in "${STAGES[@]}"; do
   "stage_$s"

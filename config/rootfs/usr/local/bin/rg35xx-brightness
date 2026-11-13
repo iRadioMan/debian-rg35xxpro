@@ -1,0 +1,7 @@
+#!/bin/sh
+# Panel backlight: a fixed set of levels, applied through brightnessctl.
+set -eu
+
+level=$(printf '%s\n' '10%' '25%' '50%' '75%' '100%' | fuzzel --dmenu --prompt 'Brightness: ')
+[ -n "$level" ] || exit 0
+exec sudo -n brightnessctl set "$level"

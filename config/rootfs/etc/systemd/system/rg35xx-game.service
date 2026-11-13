@@ -1,0 +1,27 @@
+[Unit]
+Description=RG35XX Pro: game or port without the frontend
+Conflicts=rg35xx-es.service rg35xx-desktop.service rg35xx-terminal.service getty@tty1.service
+After=systemd-user-sessions.service sound.target
+Wants=sound.target
+OnFailure=rg35xx-terminal.service
+
+[Service]
+Type=simple
+User=gamer
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=tty
+EnvironmentFile=-/etc/rg35xx/session.env
+EnvironmentFile=-/etc/rg35xx/kms.env
+Environment=RG35XX_IN_GAME=1
+# ES-DE is already gone (Conflicts), close its page cache too and stop the periodic boot report
+# so the emulator gets the whole 1 GiB.
+ExecStartPre=+/usr/local/bin/rg35xx-free-memory
+ExecStartPre=+/usr/local/bin/rg35xx-wait-audio
+ExecStart=/usr/local/bin/rg35xx-game-exec
+ExecStopPost=+/usr/local/bin/rg35xx-session-after-game
+KillMode=control-group
+TimeoutStopSec=10
+Restart=no

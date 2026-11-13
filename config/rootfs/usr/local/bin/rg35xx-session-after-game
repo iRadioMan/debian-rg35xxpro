@@ -1,0 +1,13 @@
+#!/bin/sh
+# ExecStopPost= of rg35xx-game.service: the game or port exited, go back to ES-DE and let the
+# periodic boot report run again (rg35xx-free-memory stopped it to keep the RAM for the game).
+set -eu
+
+# A poweroff/reboot issued from inside the game must not resurrect the frontend.
+# (Do not test for /run/systemd/shutdown: the directory exists on a running system too.)
+[ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && exit 0
+
+systemctl start boot-report.timer >/dev/null 2>&1 || true
+
+printf 'es\n' > /run/rg35xx/target
+exec systemctl --no-block start rg35xx-es.service

@@ -1,0 +1,6 @@
+# Session-wide environment for labwc (read before any autostart program starts).
+XCURSOR_THEME=Adwaita
+XCURSOR_SIZE=24
+MOZ_ENABLE_WAYLAND=1
+QT_QPA_PLATFORM=wayland
+GDK_BACKEND=wayland

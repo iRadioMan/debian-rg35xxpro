@@ -1,0 +1,75 @@
+#!/bin/sh
+# Wi-Fi setup for the desktop session: scan with wpa_cli, pick an SSID, type the passphrase.
+# wpa_cli talks to the control socket (ctrl_interface GROUP=netdev), so no root is needed;
+# wpa_supplicant itself performs save_config.
+set -eu
+
+iface=wlan0
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+rfkill unblock wifi 2>/dev/null || true
+
+if ! wpa_cli -i "$iface" ping >/dev/null 2>&1; then
+  echo "wpa_supplicant is not answering on $iface" >&2
+  printf 'Press Enter to close\n'
+  read -r _
+  exit 1
+fi
+
+scan_list() {
+  wpa_cli -i "$iface" scan_results 2>/dev/null |
+    awk -F'\t' 'NR > 1 && $1 != "" { gsub(/^ +| +$/, "", $5); if ($5 != "" && $5 != "-----") print $5 }' |
+    sort -u > "$tmp/ssids"
+}
+
+# The first scan_results after a scan is often empty; retry until something shows up.
+i=0
+while [ "$i" -lt 10 ]; do
+  wpa_cli -i "$iface" scan >/dev/null 2>&1 || true
+  sleep 1
+  scan_list
+  [ -s "$tmp/ssids" ] && break
+  i=$((i + 1))
+done
+
+if [ ! -s "$tmp/ssids" ]; then
+  dialog --msgbox 'No networks found.' 7 40
+  exit 1
+fi
+
+# dialog --menu takes "tag item" pairs; the SSID is both, so spaces and duplicates survive.
+set -- --menu 'Select a network' 18 60 8
+while IFS= read -r ssid; do
+  set -- "$@" "$ssid" "$ssid"
+done < "$tmp/ssids"
+
+ssid=$(dialog --stdout "$@") || exit 0
+[ -n "$ssid" ] || exit 0
+
+psk=$(dialog --stdout --insecure --passwordbox "Passphrase for \"$ssid\" (empty = open network)" 9 50) || exit 0
+
+id=$(wpa_cli -i "$iface" add_network | tail -1)
+case "$id" in
+  '' | *[!0-9]*)
+    dialog --msgbox "add_network failed: $id" 8 50
+    exit 1
+    ;;
+esac
+
+wpa_cli -i "$iface" set_network "$id" ssid "\"$ssid\"" >/dev/null
+if [ -n "$psk" ]; then
+  wpa_cli -i "$iface" set_network "$id" psk "\"$psk\"" >/dev/null
+else
+  wpa_cli -i "$iface" set_network "$id" key_mgmt NONE >/dev/null
+fi
+wpa_cli -i "$iface" enable_network "$id" >/dev/null
+wpa_cli -i "$iface" select_network "$id" >/dev/null
+wpa_cli -i "$iface" save_config >/dev/null
+
+# wifi-provision rewrites /etc/wpa_supplicant/wpa_supplicant-wlan0.conf from /boot/firmware/
+# wifi.conf on every boot, so the boot-partition copy has to go or this network is lost.
+sudo -n rm -f /boot/firmware/wifi.conf
+sync
+
+dialog --msgbox "Saved \"$ssid\"." 7 50

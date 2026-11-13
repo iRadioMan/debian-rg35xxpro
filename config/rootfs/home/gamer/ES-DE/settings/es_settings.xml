@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<bool name="CustomEventScripts" value="true" />
+<bool name="ShowQuitMenu" value="true" />
+<bool name="BackEventAppExit" value="true" />
+<string name="ROMDirectory" value="/roms" />
+<string name="Theme" value="linear-es-de" />
+<string name="ThemeAspectRatio" value="4:3" />

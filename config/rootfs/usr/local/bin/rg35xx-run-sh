@@ -1,0 +1,14 @@
+#!/bin/sh
+# Launch a port script (ES-DE `ports` entry) with the frontend stopped.
+#
+# ES-DE runs this as gamer; the argument list is handed to rg35xx-game.service through
+# /run/rg35xx/game.args, because the service itself is started by root and cannot see ES's argv.
+set -eu
+
+src=${1:?usage: rg35xx-run-sh /roms/ports/<port>.sh}
+[ -f "$src" ] || { echo "rg35xx-run-sh: no such file: $src" >&2; exit 1; }
+dir=$(dirname "$src")
+
+printf '%s\0' --sh "$src" "$dir" > /run/rg35xx/game.args
+chmod 0644 /run/rg35xx/game.args
+exec sudo -n /usr/local/bin/rg35xx-session game

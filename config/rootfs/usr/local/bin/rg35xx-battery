@@ -1,0 +1,8 @@
+#!/bin/sh
+# Waybar battery module: the first /sys/class/power_supply battery capacity in percent.
+for f in /sys/class/power_supply/*battery*/capacity; do
+  [ -r "$f" ] || continue
+  printf '%s%%\n' "$(cat "$f")"
+  exit 0
+done
+printf -- '--\n'

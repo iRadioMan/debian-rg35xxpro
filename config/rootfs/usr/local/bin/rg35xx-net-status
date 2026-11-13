@@ -1,0 +1,12 @@
+#!/bin/sh
+# Waybar network module: "<SSID> <IPv4>" when wlan0 is associated, "off" otherwise.
+if ! iw dev wlan0 link 2>/dev/null | grep -q '^Connected to'; then
+  printf 'off\n'
+  exit 0
+fi
+
+ssid=$(iw dev wlan0 link 2>/dev/null | awk -F': ' '/^[[:space:]]*SSID:/{print $2; exit}')
+[ -n "$ssid" ] || ssid='hidden'
+
+ip=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+printf '%s %s\n' "$ssid" "${ip:-no-ip}"

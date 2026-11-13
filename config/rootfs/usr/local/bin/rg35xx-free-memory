@@ -1,0 +1,10 @@
+#!/bin/sh
+# ExecStartPre=+ of rg35xx-game.service: the frontend has just been stopped, so its 150-200 MiB of
+# page cache is still resident. Drop it and stop the 30-minute boot report before the emulator
+# allocates, so the game gets the whole 1 GiB instead of fighting the kernel for it.
+set -eu
+
+systemctl stop boot-report.timer >/dev/null 2>&1 || true
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+exit 0

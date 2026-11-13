@@ -1,0 +1,6 @@
+# Every session switch and every PortMaster action goes through sudo: PortMaster itself calls
+# sudo for chmod /dev/tty0, /dev/uinput, bind-mounts and port installs, so a narrower rule would
+# only break ports. The device already boots to root/root with SSH root login enabled (see
+# 10-root.conf); this does not widen the security boundary on a single-user handheld.
+Defaults:gamer !requiretty
+gamer ALL=(ALL) NOPASSWD: ALL

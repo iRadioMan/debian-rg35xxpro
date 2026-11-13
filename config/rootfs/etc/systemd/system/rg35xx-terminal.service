@@ -1,0 +1,9 @@
+[Unit]
+Description=RG35XX Pro: plain text console on tty1
+Conflicts=rg35xx-es.service rg35xx-desktop.service rg35xx-game.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/systemctl start getty@tty1.service
+ExecStop=/bin/systemctl stop getty@tty1.service

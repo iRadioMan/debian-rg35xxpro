@@ -1,0 +1,30 @@
+#!/bin/sh
+# Waybar "Settings" button: one dmenu for everything that needs root or a keyboard.
+set -eu
+
+choice=$(printf '%s\n' \
+  'Wi-Fi' \
+  'Bluetooth' \
+  'Sound' \
+  'Brightness' \
+  'System info' \
+  'Exit to EmulationStation' \
+  'Terminal mode' \
+  'Reboot' \
+  'Power off' | fuzzel --dmenu --prompt '> ')
+
+[ -n "$choice" ] || exit 0
+
+case "$choice" in
+  Wi-Fi) foot -T Wi-Fi -e /usr/local/bin/rg35xx-wifi ;;
+  Bluetooth) foot -T Bluetooth -e bluetoothctl ;;
+  Sound) pavucontrol ;;
+  Brightness) exec /usr/local/bin/rg35xx-brightness ;;
+  'System info')
+    foot -e sh -c 'free -m; df -h / /boot/firmware; uptime; printf "\nPress Enter to close\n"; read -r _'
+    ;;
+  'Exit to EmulationStation') exec sudo -n /usr/local/bin/rg35xx-session es ;;
+  'Terminal mode') exec sudo -n /usr/local/bin/rg35xx-session terminal ;;
+  Reboot) exec sudo -n /usr/local/bin/rg35xx-session reboot ;;
+  'Power off') exec sudo -n /usr/local/bin/rg35xx-session poweroff ;;
+esac

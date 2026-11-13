@@ -1,0 +1,15 @@
+#!/bin/sh
+# ExecStopPost= of rg35xx-desktop.service. Quitting the desktop normally (labwc exit) goes back to
+# ES-DE; an explicit switch or a shutdown leaves the target alone.
+set -eu
+
+# A shutdown/reboot is already in progress (see the same note in rg35xx-session-after-es).
+[ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && exit 0
+
+target=$(cat /run/rg35xx/target 2>/dev/null || true)
+case "$target" in
+  es | game | terminal | poweroff | reboot) exit 0 ;;
+esac
+
+printf 'es\n' > /run/rg35xx/target
+exec systemctl --no-block start rg35xx-es.service

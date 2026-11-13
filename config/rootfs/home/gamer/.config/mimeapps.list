@@ -1,0 +1,14 @@
+[Default Applications]
+image/png=imv.desktop
+image/jpeg=imv.desktop
+image/gif=imv.desktop
+text/plain=mousepad.desktop
+audio/mpeg=audacious.desktop
+audio/flac=audacious.desktop
+audio/ogg=audacious.desktop
+video/mp4=smplayer.desktop
+video/x-matroska=smplayer.desktop
+video/webm=smplayer.desktop
+text/html=firefox-esr.desktop
+x-scheme-handler/http=firefox-esr.desktop
+x-scheme-handler/https=firefox-esr.desktop

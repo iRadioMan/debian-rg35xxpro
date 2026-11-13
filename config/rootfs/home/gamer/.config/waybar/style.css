@@ -1,0 +1,47 @@
+/* 640x480 panel: every pixel of width costs a module, so the bar stays 28 px and the padding
+ * stays at the minimum waybar accepts. */
+* {
+  font-family: "DejaVu Sans";
+  font-size: 11px;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+}
+
+window#waybar {
+  background: #1e1e2e;
+  color: #cdd6f4;
+}
+
+#custom-menu,
+#clock,
+#pulseaudio,
+#custom-net,
+#custom-bat,
+#custom-settings {
+  padding: 0 6px;
+  margin: 0;
+}
+
+#custom-menu,
+#custom-settings {
+  background: #313244;
+  color: #cdd6f4;
+}
+
+#custom-menu:hover,
+#custom-settings:hover {
+  background: #45475a;
+}
+
+#custom-bat {
+  color: #a6e3a1;
+}
+
+#custom-net {
+  color: #89b4fa;
+}
+
+#pulseaudio.muted {
+  color: #f38ba8;
+}

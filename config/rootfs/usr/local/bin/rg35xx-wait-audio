@@ -1,0 +1,10 @@
+#!/bin/sh
+# ExecStartPre=+ of rg35xx-es.service and rg35xx-game.service: give the PipeWire session up to
+# 10 s to appear. Missing audio must never block a session (a silent ES beats no ES).
+sock=/run/user/1000/pulse/native
+i=0
+while [ ! -S "$sock" ] && [ "$i" -lt 100 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+exit 0
