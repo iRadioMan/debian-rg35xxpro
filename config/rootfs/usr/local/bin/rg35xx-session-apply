@@ -19,9 +19,18 @@ esac
 target=rg35xx-$mode.service
 for unit in rg35xx-es.service rg35xx-desktop.service rg35xx-game.service rg35xx-terminal.service; do
   [ "$unit" = "$target" ] && continue
+  # A session that is already going down can have leftovers that ignore SIGTERM: PortMaster re-execs
+  # itself through sudo, and that sudo swallows the signal, so systemd would only SIGKILL them when
+  # TimeoutStopSec expires. Until then they hold /dev/dri/card1 and the next session dies with
+  # "kmsdrm not available". Force them out here, where killing that cgroup cannot hit this helper.
+  # A session that is still running is stopped gracefully below, as before.
+  state=$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || true)
+  case "$state" in
+    deactivating | failed) systemctl kill -s SIGKILL "$unit" 2>/dev/null || true ;;
+  esac
   systemctl stop "$unit" || true
-  # A session that had to be SIGKILLed (ES-DE ignores the quit flag while a dialog is open) is
-  # left in the "failed" state; clearing it keeps a normal switch from looking like a crash.
+  # A session stopped that way is left in the "failed" state; clearing it keeps a normal switch from
+  # looking like a crash.
   systemctl reset-failed "$unit" 2>/dev/null || true
 done
 

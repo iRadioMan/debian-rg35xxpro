@@ -9,5 +9,13 @@ set -eu
 
 systemctl start boot-report.timer >/dev/null 2>&1 || true
 
+# Hand the switch to the helper instead of starting ES-DE here. Children of a port outlive its main
+# process (PortMaster re-execs itself through sudo, and that sudo ignores SIGTERM), and while they
+# live this hook runs inside the very cgroup they occupy: killing them from here would kill the hook
+# itself, and ES-DE started on top of them fails with "kmsdrm not available". The helper runs
+# outside every session, force-clears such leftovers, waits for this unit's stop job to finish and
+# only then starts the frontend. previous= is left alone: leaving a game returns to the frontend, and
+# the frontend still remembers the session it was entered from (desktop or console).
 printf 'es\n' > /run/rg35xx/target
-exec systemctl --no-block start rg35xx-es.service
+exec /usr/bin/systemd-run --quiet --collect --no-block --unit=rg35xx-switch-after-game-$$ \
+  /usr/local/bin/rg35xx-session-apply es
