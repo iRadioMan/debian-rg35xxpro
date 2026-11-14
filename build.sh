@@ -57,8 +57,44 @@ CROSS=aarch64-linux-gnu-
 JOBS=$(nproc)
 IMG_NAME=rg35xxpro-debian.img
 
+# Partition layout, in MiB. The image stops right after the root filesystem: a card is always
+# bigger than the image, and everything left over becomes the FAT32 user-data partition (/roms)
+# created on first boot by rg35xx-userdata.service.
+BOOT_OFFSET_MIB=16
+BOOT_MIB=512
+ROOT_MIB=4096
+BOOT_START_SECT=$(( BOOT_OFFSET_MIB * 2048 ))
+BOOT_SECT=$(( BOOT_MIB * 2048 ))
+ROOT_START_SECT=$(( BOOT_START_SECT + BOOT_SECT ))
+ROOT_START_MIB=$(( BOOT_OFFSET_MIB + BOOT_MIB ))
+IMG_MIB=$(( BOOT_OFFSET_MIB + BOOT_MIB + ROOT_MIB ))
+
 log() { printf '\n=== %s ===\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Build-only apt policy and a retrying wrapper. Two properties of the build host are hostile to
+# apt: its AAAA path to the mirrors is dead (apt sits out the whole connect timeout and then says
+# "Unable to connect"), and all egress goes through a transparent proxy that drops close to a
+# third of the connects. Measured on the mirrors: 5-8 of 10 requests succeed. So: IPv4 only, short
+# timeouts, many internal retries, and an outer retry so one unlucky package cannot sink a stage.
+apt_build_conf() {
+  cat > "$ROOTFS/etc/apt/apt.conf.d/99-rg35xxpro-build" <<'EOF'
+Acquire::ForceIPv4 "true";
+Acquire::Retries "10";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+EOF
+}
+
+apt_get() { # apt-get inside the rootfs, retried while it is a network error
+  local n=1
+  while ! chroot "$ROOTFS" apt-get "$@"; do
+    [ "$n" -ge 4 ] && die "apt-get $* failed after $n attempts"
+    n=$((n + 1))
+    printf 'retrying apt-get (attempt %d/4): %s\n' "$n" "$*"
+    sleep 10
+  done
+}
 
 # fetch <url> <sha256> <file>: reuse a cached download that still matches, otherwise download and
 # verify. Any mismatch aborts the build; no tarball is ever used unverified.
@@ -70,58 +106,32 @@ fetch() {
 
 [ "$(id -u)" = 0 ] || die "run as root (debootstrap/chroot); try: sudo $0 $*"
 
-# Wi-Fi credentials are optional. config/wifi.env (gitignored, real values) wins; the committed
-# template config/wifi.env.example contains placeholders. With no real credentials the image still
-# gets a valid wpa_supplicant config, but no network block: configure Wi-Fi on the device or from
-# /wifi.conf on the FAT boot partition.
+# Wi-Fi credentials are optional and live in config/wifi.conf (gitignored, real values); the
+# committed config/wifi.env.example carries placeholders. Either file may describe several
+# networks — see config/rootfs/usr/local/sbin/wifi-config-gen, which renders the wpa_supplicant
+# config and is the same program wifi-provision.service runs on the device. The name is wifi.conf
+# because the very same file is what gets copied to the FAT boot partition of a flashed card.
+WIFI_GEN=$CFG/rootfs/usr/local/sbin/wifi-config-gen
+WIFI_ENV=
+
+# Sets WIFI_ENV to the settings file that actually contains a network, empty when there is none.
 load_wifi() {
-  WIFI_SSID=
-  WIFI_PSK=
-  WIFI_COUNTRY=00
   local f
-  for f in "$CFG/wifi.env" "$CFG/wifi.env.example"; do
-    if [ -r "$f" ]; then
-      # shellcheck disable=SC1090
-      . "$f"
-      break
+  WIFI_ENV=
+  for f in "$CFG/wifi.conf" "$CFG/wifi.env" "$CFG/wifi.env.example"; do
+    [ -r "$f" ] || continue
+    if sh "$WIFI_GEN" "$f" 2>/dev/null | grep -q '^network='; then
+      WIFI_ENV=$f
+      return 0
     fi
   done
-  # Tolerate CRLF from editors on Windows; the values must not carry a stray \r into
-  # wpa_supplicant or /wifi.conf.
-  WIFI_SSID=${WIFI_SSID%$'\r'}
-  WIFI_PSK=${WIFI_PSK%$'\r'}
-  WIFI_COUNTRY=${WIFI_COUNTRY%$'\r'}
-  WIFI_COUNTRY=${WIFI_COUNTRY:-00}
-}
-
-wifi_configured() {
-  case "${WIFI_SSID:-}" in "" | "YOUR_SSID" | "CHANGEME") return 1 ;; esac
-  case "${WIFI_PSK:-}" in "" | "YOUR_PASSPHRASE" | "CHANGEME") return 1 ;; esac
   return 0
 }
 
-# Escape a value for a double-quoted shell assignment in /wifi.conf.
-sh_dquote() { printf '%s' "$1" | sed -e 's/[\\"$`]/\\&/g'; }
-
-write_wpa_config() { # destination
-  local dst=$1 block
+write_wpa_config() { # destination [settings-file]
+  local dst=$1 src=${2:-$CFG/wifi.env.example}
   mkdir -p "$(dirname "$dst")"
-  {
-    echo "country=$WIFI_COUNTRY"
-    echo "ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev"
-    echo "update_config=1"
-    echo "powersave=0"
-    echo
-    if wifi_configured; then
-      block=$(wpa_passphrase "$WIFI_SSID" "$WIFI_PSK") ||
-        die "wpa_passphrase rejected WIFI_SSID/WIFI_PSK from config/wifi.env"
-      # wpa_passphrase keeps the passphrase in a comment next to the hash; do not ship it twice.
-      printf '%s\n' "$block" | sed -e '/^[[:space:]]*#psk=/d'
-    else
-      echo "# No Wi-Fi network is baked into this image. Add one with wpa_cli, or put a"
-      echo "# wifi.conf on the FAT boot partition (see README.md)."
-    fi
-  } > "$dst"
+  sh "$WIFI_GEN" "$src" > "$dst"
   chmod 600 "$dst"
 }
 
@@ -328,26 +338,41 @@ stage_rootfs() {
   printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
   chmod +x "$ROOTFS/usr/sbin/policy-rc.d"
   cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+  # The cleanup below deletes qemu-aarch64-static, so re-running this stage on an existing rootfs
+  # must put it back before the first chroot call.
+  [ -x "$ROOTFS/usr/bin/qemu-aarch64-static" ] || install -m 0755 /usr/bin/qemu-aarch64-static "$ROOTFS/usr/bin/"
 
   cat > "$ROOTFS/etc/apt/sources.list" <<'EOF'
 deb http://deb.debian.org/debian trixie main
 deb http://deb.debian.org/debian trixie-updates main
 deb http://security.debian.org/debian-security trixie-security main
 EOF
+  # The build host resolves both A and AAAA for the mirrors but its IPv6 path is dead and the rest
+  # is flaky; see apt_build_conf. Build-only: the cleanup below deletes the file.
+  apt_build_conf
 
   export DEBIAN_FRONTEND=noninteractive
-  chroot "$ROOTFS" apt-get update
-  chroot "$ROOTFS" apt-get install -y --no-install-recommends \
+  apt_get update
+  apt_get install -y --no-install-recommends \
     systemd-sysv openssh-server wpasupplicant iw iproute2 systemd-resolved avahi-daemon \
     libnss-mdns kbd console-setup usbutils evtest kmod ca-certificates curl nano sudo udev \
     mesa-utils mesa-utils-extra libgl1-mesa-dri libegl1 libgles2 libgbm1 libdrm-tests kmscube \
     wireless-regdb alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber \
-    pulseaudio-utils rtkit triggerhappy zram-tools unzip
+    pulseaudio-utils rtkit triggerhappy zram-tools unzip fdisk dosfstools rfkill dbus-user-session
 
   log "base configuration"
   echo "rg35xxpro" > "$ROOTFS/etc/hostname"
   printf '127.0.0.1\tlocalhost\n127.0.1.1\trg35xxpro\n' > "$ROOTFS/etc/hosts"
-  printf '/dev/mmcblk0p2\t/\text4\tdefaults,noatime,commit=120,errors=remount-ro\t0 1\n/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,noatime,nofail\t0 2\ntmpfs\t/tmp\ttmpfs\tdefaults,noatime,nosuid,nodev,size=256M,mode=1777\t0 0\n' \
+  # /roms is the FAT32 user-data partition created on first boot by rg35xx-userdata.service. The
+  # mount unit is ordered after that service (x-systemd.requires/after), and nofail keeps the boot
+  # going when the partition does not exist yet (first boot) or the card is too small.
+  # uid/gid 1000 + fmask/dmask 0022: gamer owns the files and everything on FAT looks executable,
+  # which is what the PortMaster and ES-DE launchers need on a filesystem without permissions.
+  printf '%b\n' \
+    '/dev/mmcblk0p2\t/\text4\tdefaults,noatime,commit=120,errors=remount-ro\t0 1' \
+    '/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,noatime,nofail\t0 2' \
+    '/dev/mmcblk0p3\t/roms\tvfat\tnoatime,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,utf8=1,iocharset=utf8,x-systemd.requires=rg35xx-userdata.service,x-systemd.after=rg35xx-userdata.service,x-systemd.device-timeout=10\t0 0' \
+    'tmpfs\t/tmp\ttmpfs\tdefaults,noatime,nosuid,nodev,size=256M,mode=1777\t0 0' \
     > "$ROOTFS/etc/fstab"
   echo 'root:root' | chroot "$ROOTFS" chpasswd
 
@@ -357,43 +382,59 @@ EOF
     done )
   # The overlay lands 0644; restore what has to be executable or unreadable by others.
   find "$ROOTFS/usr/local/bin" "$ROOTFS/usr/local/sbin" -type f -exec chmod 0755 {} +
-  find "$ROOTFS/roms" -name '*.sh' -exec chmod 0755 {} +
+  find "$ROOTFS/usr/share/rg35xx/roms-seed" -name '*.sh' -exec chmod 0755 {} +
   find "$ROOTFS/home/gamer/ES-DE/scripts" -name '*.sh' -exec chmod 0755 {} +
   chmod 0755 "$ROOTFS/home/gamer/.config/labwc/autostart"
   chmod 0440 "$ROOTFS/etc/sudoers.d/10-rg35xx"
 
   log "wpa_supplicant config (config/wifi.env)"
   load_wifi
-  if wifi_configured; then
-    echo "baking network \"$WIFI_SSID\", country $WIFI_COUNTRY"
+  if [ -n "$WIFI_ENV" ]; then
+    echo "baking $(sh "$WIFI_GEN" "$WIFI_ENV" | grep -c '^network=') network(s) from ${WIFI_ENV#"$REPO"/}"
   else
-    echo "no credentials in config/wifi.env (placeholders only): Wi-Fi must be configured on the device"
+    echo "no network in config/wifi.env (placeholders only): Wi-Fi must be configured on the device"
   fi
-  write_wpa_config "$ROOTFS/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
+  write_wpa_config "$ROOTFS/etc/wpa_supplicant/wpa_supplicant-wlan0.conf" "${WIFI_ENV:-$CFG/wifi.env.example}"
 
   log "provisioning (user, PipeWire, suspend guard, volume keys, zram, ALSA defaults)"
   cp "$REPO/scripts/device-provision.sh" "$ROOTFS/tmp/"
-  chroot "$ROOTFS" /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    /bin/sh /tmp/device-provision.sh --offline
+  # The script runs apt-get itself and is idempotent, so retry the whole run on a network hiccup.
+  n=1
+  until chroot "$ROOTFS" /usr/bin/env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        /bin/sh /tmp/device-provision.sh --offline; do
+    [ "$n" -ge 3 ] && die "device-provision.sh failed after $n attempts"
+    n=$((n + 1))
+    printf 'retrying device-provision.sh (attempt %d/3)\n' "$n"
+    sleep 10
+  done
   rm -f "$ROOTFS/tmp/device-provision.sh"
 
-  log "roms tree"
-  # One directory per system ES-DE is configured for, plus the ports and desktop entries.
-  for d in ports desktop nes snes gb gbc gba genesis psx n64 nds arcade pcengine ngp \
+  log "roms seed tree"
+  # /roms is a mount point on the device, not content: drop whatever a previous build left there
+  # (PortMaster used to be installed into /roms/ports) so the image cannot carry a hidden copy that
+  # the mount then hides.
+  rm -rf "$ROOTFS/roms"
+  install -d "$ROOTFS/roms"
+  # One directory per system ES-DE is configured for (the desktop entries and the PortMaster
+  # launcher come from the rootfs overlay). rg35xx-userdata-seed.service copies this into /roms.
+  for d in nes snes gb gbc gba genesis psx n64 nds arcade pcengine ngp \
            wonderswan virtualboy amiga c64 dos scummvm dreamcast psp 3do atari2600 atari7800; do
-    install -d -o 1000 -g 1000 "$ROOTFS/roms/$d"
+    install -d "$ROOTFS/usr/share/rg35xx/roms-seed/systems/$d"
   done
-  # gamer owns its home and the ROM tree; device-provision.sh created the user above.
-  chown -R 1000:1000 "$ROOTFS/home/gamer" "$ROOTFS/roms"
+  # gamer owns its home; device-provision.sh created the user above.
+  chown -R 1000:1000 "$ROOTFS/home/gamer"
 
   log "enable units"
   for u in ssh.service systemd-networkd.service systemd-resolved.service \
            wpa_supplicant@wlan0.service wifi-provision.service wifi-powersave-off.service \
            boot-report.timer fstrim.timer avahi-daemon.service triggerhappy.service \
-           zramswap.service rg35xx-codec-defaults.service rg35xx-es.service; do
+           zramswap.service rg35xx-codec-defaults.service rg35xx-es.service \
+           rg35xx-wifi-unblock.service rg35xx-userdata.service rg35xx-userdata-seed.service; do
     dst=$ROOTFS/etc/systemd/system/$(dirname "$u").wants
     case "$u" in
       *.timer) dst=$ROOTFS/etc/systemd/system/timers.target.wants ;;
+      # Partition creation belongs inside local-fs.target, before roms.mount exists.
+      rg35xx-userdata.service) dst=$ROOTFS/etc/systemd/system/local-fs.target.wants ;;
       wpa_supplicant@wlan0.service) dst=$ROOTFS/etc/systemd/system/multi-user.target.wants ;;
       *) dst=$ROOTFS/etc/systemd/system/multi-user.target.wants ;;
     esac
@@ -402,6 +443,12 @@ EOF
       ln -sfn "/usr/lib/systemd/system/$u" "$dst/$u"
     elif [ -e "$ROOTFS/etc/systemd/system/$u" ]; then
       ln -sfn "/etc/systemd/system/$u" "$dst/$u"
+    elif [ -e "$ROOTFS/usr/lib/systemd/system/${u%%@*}@.service" ]; then
+      # Template unit: wpa_supplicant@wlan0.service has no file of its own, the link has to point
+      # at wpa_supplicant@.service or systemd never starts the instance.
+      ln -sfn "/usr/lib/systemd/system/${u%%@*}@.service" "$dst/$u"
+    elif [ -e "$ROOTFS/etc/systemd/system/${u%%@*}@.service" ]; then
+      ln -sfn "/etc/systemd/system/${u%%@*}@.service" "$dst/$u"
     else
       echo "WARNING: unit $u not found"
     fi
@@ -425,6 +472,7 @@ EOF
   log "cleanup"
   chroot "$ROOTFS" apt-get clean
   rm -rf "$ROOTFS"/var/lib/apt/lists/*
+  rm -f "$ROOTFS/etc/apt/apt.conf.d/99-rg35xxpro-build"
   rm -f "$ROOTFS/usr/bin/qemu-aarch64-static" "$ROOTFS/usr/sbin/policy-rc.d"
   # /etc/resolv.conf must point at resolved, never at the build host's resolver
   rm -f "$ROOTFS/etc/resolv.conf"
@@ -457,8 +505,12 @@ libgles-dev libegl-dev libpoppler-cpp-dev"
   if [ "$(cat "$ROOTFS/etc/rg35xx-cores.version" 2>/dev/null || true)" != "$cores_sum" ]; then
     log "libretro cores from $CORES_URL"
     mkdir -p "$libretro"
-    while read -r sha core; do
-      case "${core:-}" in '' | '#'*) continue ;; esac
+    while read -r sha core _; do
+      # config/retroarch-cores.sha256 has a "#" headed comment block, where the first *word* is the
+      # comment marker and the rest of the line lands in $core, so test the digest field.
+      case "${sha:-}" in '' | '#'*) continue ;; esac
+      [ -n "${core:-}" ] || continue
+      [ "${#sha}" = 64 ] || die "config/retroarch-cores.sha256: malformed line \"$sha $core\""
       fetch "$CORES_URL/${core}_libretro.so.zip" "$sha" "$BUILD_DIR/core-$core.zip"
       unzip -o -j -q "$BUILD_DIR/core-$core.zip" -d "$libretro"
     done < "$CFG/retroarch-cores.sha256"
@@ -469,9 +521,11 @@ libgles-dev libegl-dev libpoppler-cpp-dev"
 
   if [ "$(cat "$ROOTFS/etc/rg35xx-es-de.version" 2>/dev/null || true)" != "$ES_DE_VER" ]; then
     log "ES-DE build dependencies"
-    chroot "$ROOTFS" apt-get update
+    # Same host limitation as in the rootfs stage: the AAAA path to the Debian mirrors is dead.
+    apt_build_conf
+    apt_get update
     # shellcheck disable=SC2086
-    chroot "$ROOTFS" apt-get install -y --no-install-recommends $es_deps
+    apt_get install -y --no-install-recommends $es_deps
 
     log "ES-DE $ES_DE_VER sources"
     fetch "$ES_DE_URL" "$ES_DE_SHA256" "$BUILD_DIR/emulationstation-de-v$ES_DE_VER.tar.gz"
@@ -480,16 +534,21 @@ libgles-dev libegl-dev libpoppler-cpp-dev"
     mv "$ROOTFS/tmp/emulationstation-de-v$ES_DE_VER" "$ROOTFS/tmp/es-de-src"
 
     log "ES-DE build"
-    # -j2, not -j$JOBS: every compiler process runs emulated by qemu-user, and one aarch64 gcc
-    # easily costs a few hundred MiB of host RAM.
+    # Parallelism is bounded by host RAM, not by nproc: every compiler process runs emulated by
+    # qemu-user, one aarch64 gcc costs ~0.5 GiB and the link step ~1.5 GiB. 1.5 GiB per job keeps
+    # a 16 GiB host at -j8 without swapping, while a small VM drops back to -j2.
     # COMPILE_LOCALIZATIONS stays ON (the default): without the compiled .mo files ES-DE logs
     # "Program resource missing ... locale/<lang>/LC_MESSAGES/<lang>.mo", calls it critical and
     # performs an emergency shutdown before the first window.
+    es_jobs=$(( $(awk '/^MemTotal:/ {print int($2 / 1048576 / 1.5)}' /proc/meminfo) ))
+    [ "$es_jobs" -ge 2 ] || es_jobs=2
+    [ "$es_jobs" -le 8 ] || es_jobs=8
+    echo "make -j$es_jobs for ES-DE"
     chroot "$ROOTFS" cmake -S /tmp/es-de-src -B /tmp/es-de-build \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
       -DGLES=ON -DDEINIT_ON_LAUNCH=ON -DAPPLICATION_UPDATER=OFF \
       -DVIDEO_HW_DECODING=OFF
-    chroot "$ROOTFS" make -C /tmp/es-de-build -j2
+    chroot "$ROOTFS" make -C /tmp/es-de-build -j"$es_jobs"
     chroot "$ROOTFS" make -C /tmp/es-de-build install
 
     # `make install` brings three themes (linear-es-de, modern-es-de, slate-es-de, 68 MiB total).
@@ -511,13 +570,29 @@ libgles-dev libegl-dev libpoppler-cpp-dev"
 #!/bin/sh
 # Everything ES-DE and the cores link against has to survive the purge of the build dependencies,
 # so mark the owning packages manual before autoremove gets a chance to drop them.
+#
+# ldd prints /lib/aarch64-linux-gnu/... on this merged-usr system (212 of the 213 entries of es-de),
+# while dpkg only knows the /usr/lib form and finds nothing under /lib. Filtering on "=> /usr/"
+# therefore kept exactly one path and autoremove deleted libgit2 and libpugixml. Hence: take every
+# resolved path, run it through realpath, then ask dpkg.
 set -e
+raw=/tmp/rg35xx-runtime-libs.raw
 list=/tmp/rg35xx-runtime-libs
 for f in /usr/bin/es-de /usr/lib/*/libretro/*.so; do
   if [ -e "$f" ]; then ldd "$f" 2>/dev/null; fi
-done | sed -n 's/^.*=> \(\/usr\/[^ ]*\).*$/\1/p' | sort -u > "$list"
+done | sed -n 's/^[[:space:]]*[^ ]* => \(\/[^ ]*\).*$/\1/p' | sort -u > "$raw"
+: > "$list"
+while IFS= read -r p; do
+  realpath -e "$p" >> "$list" 2>/dev/null || true
+done < "$raw"
+sort -u -o "$list" "$list"
+count=$(wc -l < "$list")
+if [ "$count" -lt 50 ]; then
+  echo "only $count libraries resolved for es-de and the cores, expected hundreds" >&2
+  exit 1
+fi
 xargs -r dpkg -S < "$list" | cut -d: -f1 | sort -u | xargs -r apt-mark manual
-rm -f "$list"
+rm -f "$raw" "$list"
 EOS
     chroot "$ROOTFS" /bin/sh /tmp/rg35xx-mark-manual.sh
     rm -f "$ROOTFS/tmp/rg35xx-mark-manual.sh"
@@ -526,7 +601,31 @@ EOS
     # shellcheck disable=SC2086
     chroot "$ROOTFS" apt-get purge -y $es_deps
     chroot "$ROOTFS" apt-get autoremove -y
+
+    # autoremove alone leaves the compiler behind: perl merely *Suggests* make and Debian keeps
+    # suggested packages (APT::AutoRemove::SuggestsImportant), which in turn holds dpkg-dev,
+    # libc6-dev, gcc-14 and ~200 MiB on the card. Ask dpkg who owns the leftover build paths
+    # instead of hardcoding versioned names, so a future trixie gcc-15 is caught the same way.
+    log "sweep the leftover toolchain"
+    sweep=$(chroot "$ROOTFS" /bin/sh -c '
+      for f in /usr/bin/gcc /usr/bin/cc /usr/bin/cpp /usr/bin/g++ /usr/bin/make \
+               /usr/bin/ld /usr/bin/ar /usr/bin/as /usr/bin/dpkg-buildpackage \
+               /usr/bin/cmake /usr/bin/msgfmt /usr/include/stdio.h; do
+        [ -e "$f" ] || continue
+        dpkg -S "$f" 2>/dev/null | head -1 | cut -d: -f1
+      done' | sort -u | tr '\n' ' ')
+    if [ -n "${sweep// /}" ]; then
+      echo "purging: $sweep"
+      # shellcheck disable=SC2086
+      chroot "$ROOTFS" apt-get purge -y $sweep
+      chroot "$ROOTFS" apt-get autoremove -y
+    fi
     chroot "$ROOTFS" apt-get clean
+    for b in gcc g++ make cmake; do
+      if chroot "$ROOTFS" /bin/sh -c "command -v $b >/dev/null 2>&1"; then
+        die "$b survived the toolchain sweep"
+      fi
+    done
 
     log "ES-DE verification"
     chroot "$ROOTFS" /usr/bin/es-de --version
@@ -618,21 +717,29 @@ PY
     die "es_find_rules.xml (linuxarm) does not list /usr/lib/aarch64-linux-gnu/libretro"
 
   log "PortMaster $PM_VER"
-  if [ "$(cat "$ROOTFS/etc/rg35xx-portmaster.version" 2>/dev/null || true)" != "$PM_VER" ]; then
+  # PortMaster lives on the FAT user-data partition on the device (/roms is that partition), so the
+  # image ships it as part of the /roms seed and rg35xx-userdata-seed.service copies it there on
+  # first boot. Keeping it on the root filesystem would hide it under the mount.
+  seed=$ROOTFS/usr/share/rg35xx/roms-seed
+  # The seed, not the version marker alone, decides: an older rootfs still has the PortMaster
+  # release installed in /roms, and the marker would then skip seeding it into the new location.
+  if [ ! -s "$seed/ports/PortMaster/PortMaster.sh" ] ||
+     [ "$(cat "$ROOTFS/etc/rg35xx-portmaster.version" 2>/dev/null || true)" != "$PM_VER" ]; then
     fetch "$PM_URL" "$PM_SHA256" "$BUILD_DIR/PortMaster-$PM_VER.zip"
-    unzip -q -o "$BUILD_DIR/PortMaster-$PM_VER.zip" -d "$ROOTFS/roms/ports"
+    unzip -q -o "$BUILD_DIR/PortMaster-$PM_VER.zip" -d "$seed/ports"
     printf '%s\n' "$PM_VER" > "$ROOTFS/etc/rg35xx-portmaster.version"
   fi
   # The release ships its own controller DB without the H700 line, so PortMaster's
   # SDL_GAMECONTROLLERCONFIG lookup would come up empty. Keep the overlay's copy on top.
-  install -m 0644 "$CFG/rootfs/roms/ports/PortMaster/gamecontrollerdb.txt" \
-    "$ROOTFS/roms/ports/PortMaster/gamecontrollerdb.txt"
-  find "$ROOTFS/roms/ports" -name '*.sh' -exec chmod 0755 {} +
-  chown -R 1000:1000 "$ROOTFS/roms" "$ROOTFS/home/gamer"
+  install -m 0644 "$CFG/rootfs/usr/share/rg35xx/roms-seed/ports/PortMaster/gamecontrollerdb.txt" \
+    "$seed/ports/PortMaster/gamecontrollerdb.txt"
+  find "$seed" -name '*.sh' -exec chmod 0755 {} +
+  chown -R 1000:1000 "$ROOTFS/home/gamer"
 
   log "frontend cleanup"
   rm -rf "$ROOTFS/tmp/es-de-src" "$ROOTFS/tmp/es-de-build"
   rm -f "$ROOTFS/usr/bin/qemu-aarch64-static"
+  rm -f "$ROOTFS/etc/apt/apt.conf.d/99-rg35xxpro-build"
   rm -rf "$ROOTFS"/var/lib/apt/lists/*
   du -sh "$ROOTFS"
 }
@@ -660,38 +767,41 @@ EOF
   local img=$BUILD_DIR/$IMG_NAME
   rm -f "$img" "$BUILD_DIR/boot.img" "$BUILD_DIR/root.img"
 
-  log "boot partition (512 MiB FAT32 @ 16 MiB)"
-  truncate -s 512M "$BUILD_DIR/boot.img"
+  log "boot partition ($BOOT_MIB MiB FAT32 @ $BOOT_OFFSET_MIB MiB)"
+  truncate -s "${BOOT_MIB}M" "$BUILD_DIR/boot.img"
   mkfs.vfat -F 32 -n BOOT "$BUILD_DIR/boot.img" >/dev/null
   mmd -i "$BUILD_DIR/boot.img" ::/extlinux
   mcopy -i "$BUILD_DIR/boot.img" "$OUT/Image" ::/Image
   mcopy -i "$BUILD_DIR/boot.img" "$OUT/sun50i-h700-anbernic-rg35xx-pro.dtb" ::/
   mcopy -i "$BUILD_DIR/boot.img" "$OUT/extlinux.conf" ::/extlinux/extlinux.conf
   mcopy -i "$BUILD_DIR/boot.img" "$OUT/boot.scr" ::/boot.scr
-  load_wifi
-  if wifi_configured; then
-    printf 'WIFI_SSID="%s"\nWIFI_PSK="%s"\nWIFI_COUNTRY=%s\n' \
-      "$(sh_dquote "$WIFI_SSID")" "$(sh_dquote "$WIFI_PSK")" "$WIFI_COUNTRY" > "$BUILD_DIR/wifi.conf"
-    mcopy -i "$BUILD_DIR/boot.img" "$BUILD_DIR/wifi.conf" ::/wifi.conf
-  fi
+  # The passphrase is deliberately not copied onto the FAT partition: that partition is plaintext
+  # and travels with every copy of the card or image. The baked config in the rootfs holds only the
+  # hash; wifi.conf stays a file the owner writes by hand when changing networks from a PC.
   mdir -i "$BUILD_DIR/boot.img" ::/
 
-  log "root partition (ext4)"
-  truncate -s $(( (16777216 - 1081344) * 512 )) "$BUILD_DIR/root.img"
+  log "root partition ($ROOT_MIB MiB ext4)"
+  used_kib=$(du -sk "$ROOTFS" | cut -f1)
+  [ "$used_kib" -lt $(( (ROOT_MIB - 128) * 1024 )) ] ||
+    die "rootfs is ${used_kib} KiB, ROOT_MIB=$ROOT_MIB leaves no room for ext4 metadata; raise ROOT_MIB in build.sh"
+  truncate -s "${ROOT_MIB}M" "$BUILD_DIR/root.img"
   mkfs.ext4 -F -L ROOT -d "$ROOTFS" "$BUILD_DIR/root.img" >/dev/null 2>&1
   e2fsck -fn "$BUILD_DIR/root.img" >/dev/null && echo "ext4 clean"
 
-  log "assemble 8 GiB image"
-  truncate -s 8G "$img"
-  sfdisk --force --no-reread "$img" >/dev/null <<'EOF'
+  # The image ends right after the root filesystem. Everything beyond it on the card is left
+  # unpartitioned on purpose: rg35xx-userdata.service turns it into /roms on first boot, sized to
+  # whatever card the image was written to.
+  log "assemble the image ($IMG_MIB MiB; the rest of the card becomes /roms on first boot)"
+  truncate -s "${IMG_MIB}M" "$img"
+  sfdisk --force --no-reread "$img" >/dev/null <<EOF
 label: dos
 unit: sectors
-start=32768, size=1048576, type=c
-start=1081344, type=83
+start=$BOOT_START_SECT, size=$BOOT_SECT, type=c
+start=$ROOT_START_SECT, size=$(( ROOT_MIB * 2048 )), type=83
 EOF
   dd if="$OUT/u-boot-sunxi-with-spl.bin" of="$img" bs=1024 seek=8 conv=notrunc status=none
-  dd if="$BUILD_DIR/boot.img" of="$img" bs=1M seek=16 conv=notrunc status=none
-  dd if="$BUILD_DIR/root.img" of="$img" bs=1M seek=528 conv=notrunc status=none
+  dd if="$BUILD_DIR/boot.img" of="$img" bs=1M seek=$BOOT_OFFSET_MIB conv=notrunc status=none
+  dd if="$BUILD_DIR/root.img" of="$img" bs=1M seek=$ROOT_START_MIB conv=notrunc status=none
   cp --sparse=always "$img" "$OUT/$IMG_NAME"
 
   log "result"
