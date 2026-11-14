@@ -38,7 +38,7 @@ apt-get install -y --no-install-recommends \
   alsa-utils pipewire pipewire-pulse pipewire-alsa wireplumber pulseaudio-utils \
   rtkit triggerhappy zram-tools \
   cage seatd earlyoom systemd-timesyncd \
-  libsdl2-2.0-0 libsdl2-ttf-2.0-0 fonts-dejavu-core \
+  libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0 fonts-dejavu-core \
   retroarch libretro-core-info retroarch-assets python3 unzip zip \
   labwc waybar pcmanfm foot imv mousepad firefox-esr audacious audacious-plugins smplayer mpv \
   antimicro xwayland xauth swaybg fuzzel pavucontrol brightnessctl dialog bluez \

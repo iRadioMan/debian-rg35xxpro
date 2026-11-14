@@ -193,7 +193,7 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
 `/proc/cmdline`, сеть, `wpa_supplicant`, input-устройства и последние 300 строк журнала (в ES
 доступен и `System info`, и `journalctl -u rg35xx-es` через SSH).
 
-## Пользовательский раздел `/roms`
+## Пользовательский раздел: `DATA` (p3) и `/roms`
 
 Образ содержит только BOOT и ROOT; игры, видео и музыка живут на отдельном разделе, который
 появляется при первом запуске:
@@ -202,33 +202,38 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
   по 1 МиБ и создаёт p3 до конца карты. Root в этот момент смонтирован, поэтому полная перечитка
   таблицы (`BLKRRPART`) отвалилась бы — используется `sfdisk --append --no-tell-kernel` и
   `partx --add`, которые добавляют только новый раздел;
-- раздел форматируется в FAT32 с меткой `DATA` — именно поэтому Windows видит его как обычную
-  флешку;
-- `roms.mount` (строка в `/etc/fstab`) монтирует его в `/roms` с `uid=1000,gid=1000` и
-  `fmask/dmask=0022`: файлы принадлежат `gamer`, всё исполняемое, как и положено FAT;
-- `rg35xx-userdata-seed.service` раскладывает в `/roms` записи `desktop`, `ports` (PortMaster) и по
-  каталогу на каждую систему. Копируются только отсутствующие записи, поэтому обновления
-  PortMaster и файлы пользователя переживают перезагрузки.
+- раздел форматируется в FAT32 с меткой `DATA` — Windows видит его как обычную флешку;
+- сам раздел монтируется в `/mnt/userdata` (`uid=gid=1000`, `fmask/dmask=0022`), а **внутри него
+  лежит один каталог `roms/`, который bind-монтируется в `/roms`**. На карте, открытой в Windows,
+  в корне раздела виден `roms` — как на стоковых прошивках Anbernic, — а не десятки системных
+  каталогов, которые создаёт ES-DE;
+- `rg35xx-userdata-seed.service` (стартует после `mnt-userdata.mount`, до `roms.mount`) создаёт
+  `roms/` и раскладывает туда записи `desktop`, `ports` (PortMaster) и по каталогу на каждую
+  систему. Копируются только отсутствующие записи, поэтому обновления PortMaster и файлы
+  пользователя переживают перезагрузки;
+- если p3 нет (первый запуск, карта ровно по размеру образа), цепочка `mnt-userdata.mount` →
+  seed → `roms.mount` скипается, и `/roms` остаётся обычным каталогом на rootfs: загрузка не
+  ломается.
 
-Служба идемпотентна: если p3 уже есть, она ничего не делает. Если карта ровно по размеру образа и
-свободного места меньше 512 МиБ, она пишет в журнал, что делать нечего, и `/roms` остаётся пустым
-каталогом — загрузка не ломается.
+На первом запуске раздел создаётся, но монтируется уже в следующей загрузке — так устроена
+транзакция `local-fs.target`. После первого включения достаточно выключить и включить устройство,
+и `roms/` появится.
 
 Ограничения FAT32: файл больше 4 ГиБ на раздел не поместить, симлинков и прав нет. Переформатировать
-p3 в exFAT можно, но тогда нужно поправить `vfat` на `exfat` в `/etc/fstab`.
+p3 в exFAT можно, но тогда нужно поправить `vfat` на `exfat` в обеих строках `/etc/fstab`.
 
 Проверка на устройстве:
 
 ```sh
 sfdisk -d /dev/mmcblk0 | grep mmcblk0p          # три раздела, p3 до конца карты
-findmnt -o TARGET,FSTYPE,SIZE,OPTIONS /roms     # vfat, весь остаток карты, uid=1000
-df -h /roms
-journalctl -b -u rg35xx-userdata -u roms.mount -u rg35xx-userdata-seed
+findmnt /mnt/userdata /roms                     # vfat и bind /dev/mmcblk0p3[/roms]
+ls /mnt/userdata                                # roms (плюс System Volume Information от Windows)
+journalctl -b -u rg35xx-userdata -u rg35xx-userdata-seed -u roms.mount
 ```
 
-Скопировать игры/видео с ПК: выключить устройство, вставить карту, открыть в Windows раздел `DATA`
-и положить файлы в нужные каталоги (`/roms/nes`, `/roms/psx`, …). ES-DE читает `ROMDirectory` из
-`es_settings.xml` — там `/roms`.
+Скопировать игры/видео с ПК: выключить устройство, вставить карту, открыть в Windows раздел `DATA`,
+зайти в `roms` и положить файлы в нужные каталоги (`roms/nes`, `roms/psx`, …). ES-DE читает
+`ROMDirectory` из `es_settings.xml` — там `/roms`.
 
 ## Режимы работы
 
@@ -263,6 +268,10 @@ ES-DE запускается в режиме 640×480 без `--resolution` (е�
 выхода ES стартует заново. Изнутри ES запуск перехватывают `/usr/local/bin/rg35xx-run-sh`
 (система `ports` пропатчена на него в `es_systems.xml`) и шим `/usr/local/bin/retroarch`:
 он кладёт argv в `/run/rg35xx/game.args` и переключает режим, а не пытается отобрать DRM у ES.
+После выхода игра закрывается через `rg35xx-session-after-game` → `rg35xx-session-apply es`:
+helper ждёт, пока cgroup сессии опустеет (дети порта могут держать DRM), снимает `failed`, и только
+потом поднимает ES-DE. Скрипт выхода ES-DE при этом молчит, если запуск игры уже запросил
+переключение — иначе `back` отменял бы запуск.
 
 ### Игры: RetroArch и ядра
 
@@ -396,10 +405,10 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
 |U-Boot (`u-boot-sunxi-with-spl.bin`)|8 КиБ|650 089 Б|raw|
 |p1 BOOT|16 МиБ (сектор 32768)|512 МиБ|FAT32: `Image`, DTB, `boot.scr`, `extlinux/extlinux.conf`|
 |p2 ROOT|528 МиБ (сектор 1081344)|4096 МиБ|ext4, метка `ROOT`, `/dev/mmcblk0p2`|
-|p3 /roms|4624 МиБ — конец карты|остаток карты|FAT32, метка `DATA`, создаётся при первом запуске|
+|p3 DATA|4624 МиБ — конец карты|остаток карты|FAT32, метка `DATA`, создаётся при первом запуске: монтируется в `/mnt/userdata`, её `roms/` — в `/roms` (bind)|
 
 Образ заканчивается на границе p2: карта всегда больше, и `rg35xx-userdata.service` отдаёт всё
-оставшееся место под `/roms`. Расчёт в `build.sh`: `BOOT_OFFSET_MIB` / `BOOT_MIB` / `ROOT_MIB`.
+оставшееся место под пользовательский раздел. Расчёт в `build.sh`: `BOOT_OFFSET_MIB` / `BOOT_MIB` / `ROOT_MIB`.
 
 Загрузка: `boot.scr` (`fatload mmc 0:1` + `booti`) → `Image` + DTB; `extlinux.conf` — резерв для `bootflow scan`.
 
@@ -508,6 +517,24 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
     пользователь: создан `gamer` (uid 1000, группы `video render input audio netdev plugdev`),
     `loginctl enable-linger gamer`, юниты `pipewire.socket`/`pipewire-pulse.socket`/`wireplumber`
     включены в его сессии. Плюс `rtkit` для реального приоритета аудиопотоков.
+12. **Запуск игры или порта выпадал в консоль.** ES-DE при остановке всегда выполняет свои quit-скрипты,
+    в том числе когда его останавливает переключатель режимов. Скрипт вызывал `rg35xx-session back`,
+    `back` писал `terminal` в `/run/rg35xx/target` и запускал консоль — поверх только что
+    запрошенной игры. Лечение: скрипт выходит молча, если в `target` лежит не `es`. Симптом в
+    журнале: `sudo rg35xx-session game` и через секунду `sudo rg35xx-session back`.
+13. **PortMaster не стартовал: `ImportError: found ['libSDL2_mixer-2.0.so.0'], but it's not usable`.**
+    В образе были только 32-битные `libsdl2-mixer`/`libsdl2-image` (для armhf-портов), а `pugwash`
+    — 64-битный python и грузит нативные библиотеки. Добавлены `libsdl2-image-2.0-0` и
+    `libsdl2-mixer-2.0-0` для arm64.
+14. **ES-DE падал с `Couldn't initialize SDL: kmsdrm not available` после выхода из порта.** Дети
+    порта живут дольше его main-процесса (`PortMaster` перезапускает себя через `sudo`, а тот
+    игнорирует SIGTERM), systemd добивает их только по `TimeoutStopSec`, и всё это время они держат
+    `/dev/dri/card1`. Теперь `rg35xx-session-apply` добивает cgroup уже остановленной сессии
+    (`systemctl kill -s SIGKILL`, только для `deactivating`/`failed`) и только потом стартует новую,
+    а выход из игры идёт через тот же helper, а не прямым `systemctl start`.
+15. **Игры лежали в корне большого раздела.** Раздел монтировался прямо в `/roms`, поэтому в Windows
+    был виден не `roms`, а десятки системных каталогов ES-DE. Теперь p3 монтируется в
+    `/mnt/userdata`, а её `roms/` — bind в `/roms`.
 
 ## Что уже разведено в железе/ядре (для следующих фаз)
 
