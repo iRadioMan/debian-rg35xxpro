@@ -7,6 +7,7 @@ set -u
 fail=0
 ok()   { printf 'OK   %s\n' "$1"; }
 bad()  { printf 'FAIL %s\n' "$1"; fail=$((fail+1)); }
+warn() { printf 'WARN %s\n' "$1"; }
 note() { printf '     %s\n' "$1"; }
 sec()  { printf '\n=== %s ===\n' "$1"; }
 
@@ -73,7 +74,7 @@ miss=$(ldd /usr/lib/aarch64-linux-gnu/libretro/*_libretro.so 2>/dev/null | grep 
 [ -z "$miss" ] && ok "core libraries resolve" || bad "core: $miss"
 if command -v retroarch >/dev/null 2>&1; then
   /usr/bin/retroarch --features 2>/dev/null | grep -i 'kms' | head -2
-  /usr/bin/retroarch --features 2>/dev/null | grep -qiE 'KMS.*context support: yes' &&
+  /usr/bin/retroarch --features 2>/dev/null | grep -qE '^[[:space:]]*KMS[[:space:]].*: yes' &&
     ok "RetroArch has KMS/EGL context" || bad "RetroArch built without KMS"
 else
   bad "retroarch missing"
@@ -119,6 +120,27 @@ for d in /roms/ports /roms/desktop /roms/nes /roms/snes /roms/psx; do
   [ -d "$d" ] || bad "missing $d"
 done
 
+sec "user-data partition (/roms)"
+nparts=$(sfdisk -d /dev/mmcblk0 2>/dev/null | grep -c '^/dev/mmcblk0p')
+if [ "${nparts:-0}" -ge 3 ]; then
+  ok "/dev/mmcblk0 has $nparts partitions, user-data is there"
+else
+  bad "/dev/mmcblk0 has ${nparts:-0} partitions: rg35xx-userdata did not create p3"
+fi
+fstype=$(findmnt -n -o FSTYPE /roms 2>/dev/null || true)
+[ "$fstype" = vfat ] && ok "/roms is mounted FAT (visible in Windows)" || bad "/roms is not a FAT mount (fstype: ${fstype:-none})"
+findmnt -n -o OPTIONS /roms 2>/dev/null | grep -q 'uid=1000' &&
+  ok "/roms belongs to gamer" || bad "/roms mount options lack uid=1000"
+[ -w /roms ] && ok "/roms is writable" || bad "/roms is not writable"
+last3=$(sfdisk -d /dev/mmcblk0 2>/dev/null | sed -n 's|^/dev/mmcblk0p3 *:.*start= *\([0-9]*\), *size= *\([0-9]*\).*|\1 \2|p')
+if [ -n "$last3" ]; then
+  set -- $last3
+  total=$(blockdev --getsz /dev/mmcblk0)
+  [ $(( $1 + $2 )) -ge $(( total - 2048 )) ] &&
+    ok "user-data partition reaches the end of the card (${2} sectors)" ||
+    warn "user-data partition ends $(( total - $1 - $2 )) sectors before the end of the card"
+fi
+
 sec "session environment"
 for f in /etc/rg35xx/session.env /etc/rg35xx/kms.env; do
   [ -r "$f" ] && ok "$f" || bad "$f missing"
@@ -140,9 +162,45 @@ fi
 for f in /home/gamer/.config/labwc/autostart /home/gamer/.config/waybar/config /home/gamer/.config/fuzzel/fuzzel.ini; do
   [ -r "$f" ] && ok "$f" || bad "$f missing"
 done
+[ -x /usr/local/bin/rg35xx-desktop-autostart ] && ok "desktop autostart wrapper present" ||
+  bad "desktop autostart wrapper missing"
+if systemctl is-active --quiet rg35xx-desktop 2>/dev/null; then
+  for c in labwc waybar swaybg pcmanfm; do
+    if pgrep -x "$c" > /dev/null 2>&1; then
+      ok "desktop client running: $c"
+    else
+      bad "desktop client not running: $c"
+    fi
+  done
+  grep -q '^font=.*pixelsize' /home/gamer/.config/fuzzel/fuzzel.ini 2>/dev/null &&
+    ok "fuzzel font is DPI-independent" || bad "fuzzel font uses point size (menu overflows the panel)"
+  if pgrep -f rg35xx-stick-mouse > /dev/null 2>&1; then
+    ok "stick-to-mouse mapper running"
+  else
+    bad "stick-to-mouse mapper not running (pointer cannot be moved)"
+  fi
+  grep -q 'N: Name="rg35xx-mouse"' /proc/bus/input/devices 2>/dev/null &&
+    ok "virtual mouse device present" || bad "virtual mouse device missing"
+else
+  note "desktop session is not active, client checks skipped"
+fi
+[ -r /run/rg35xx/desktop.log ] && { ok "desktop session log available"; tail -20 /run/rg35xx/desktop.log | sed 's/^/     /'; } ||
+  note "no desktop log (the desktop session has not run since boot)"
+[ -r /run/rg35xx/game.log ] && { ok "game log available"; tail -20 /run/rg35xx/game.log | sed 's/^/     /'; } ||
+  note "no game log (nothing was launched since boot)"
+[ -r /roms/ports/PortMaster/log.txt ] && { ok "PortMaster log available"; tail -15 /roms/ports/PortMaster/log.txt | sed 's/^/     /'; } ||
+  note "no PortMaster log yet"
 
 sec "network"
 ip -br a 2>&1
+rfkill list 2>/dev/null | head -10
+if rfkill list wifi 2>/dev/null | grep -q 'blocked: yes'; then
+  bad "Wi-Fi radio is blocked (rfkill)"
+else
+  ok "Wi-Fi radio not blocked"
+fi
+systemctl is-active wpa_supplicant@wlan0 >/dev/null 2>&1 && ok "wpa_supplicant@wlan0 active" ||
+  bad "wpa_supplicant@wlan0 not active"
 if iw dev wlan0 link 2>/dev/null | grep -q '^Connected to'; then
   ok "wlan0 associated: $(iw dev wlan0 link | awk '/SSID/{print $2}')"
   note "signal: $(iw dev wlan0 link | awk '/signal/{print $2, $3}')"
@@ -175,7 +233,10 @@ else
 fi
 
 sec "kmscube (5 s, must not crash)"
-if command -v kmscube >/dev/null 2>&1; then
+if systemctl is-active --quiet rg35xx-desktop rg35xx-es rg35xx-game 2>/dev/null; then
+  # kmscube needs to be DRM master; a running session owns the device by design.
+  note "a graphical session holds the DRM device, kmscube check skipped"
+elif command -v kmscube >/dev/null 2>&1; then
   # the modeset device is sun4i-drm (card1 here), not panfrost (card0 = render-only GPU)
   MODESET=""
   for c in /sys/class/drm/card*/device/uevent; do

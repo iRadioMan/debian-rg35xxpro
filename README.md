@@ -1,7 +1,8 @@
 # RG35XX Pro (Allwinner H700): Debian 13 arm64 — сборка образа с нуля
 
 Репозиторий собирает загружаемый образ для Anbernic RG35XX Pro: U-Boot + Linux 7.1.2 + Debian 13
-(trixie) arm64, MBR, 8 ГиБ. Загрузка заканчивается в EmulationStation (ES-DE 3.5.0) на панели
+(trixie) arm64, MBR. В образе два раздела — BOOT и ROOT; остальное место карты при первом запуске
+превращается в третий раздел `/roms` (FAT32, виден в Windows) под игры, видео и музыку. Загрузка заканчивается в EmulationStation (ES-DE 3.5.0) на панели
 640×480 через KMS/DRM; из неё открываются игры (RetroArch + ядра libretro), порты (PortMaster),
 Desktop (labwc) и обычный текстовый терминал на `tty1`. Все режимы взаимоисключающие: на `tty1`
 одновременно живёт ровно один из них.
@@ -36,8 +37,8 @@ git clone <URL-репозитория> debian-rg35xxpro
 cd debian-rg35xxpro
 
 # Необязательно: Wi-Fi, который будет уже прописан в образе.
-cp config/wifi.env.example config/wifi.env
-$EDITOR config/wifi.env
+cp config/wifi.env.example config/wifi.conf
+$EDITOR config/wifi.conf
 
 sudo ./build.sh
 ```
@@ -49,7 +50,7 @@ sudo ./build.sh
 
 |Файл|Что это|
 |---|---|
-|`out/rg35xxpro-debian.img`|образ 8 ГиБ для SD-карты|
+|`out/rg35xxpro-debian.img`|образ 4624 МиБ для SD-карты (остаток карты станет `/roms`)|
 |`out/rg35xxpro-debian.img.sha256`|контрольная сумма|
 |`out/Image`, `out/*.dtb`|ядро и DTB (для отладки/замены на p1)|
 |`out/u-boot-sunxi-with-spl.bin`|загрузчик (уже записан в образ)|
@@ -66,36 +67,62 @@ cd out && sha256sum -c rg35xxpro-debian.img.sha256
 
 В образе нет чужих сетей. Есть три способа задать Wi-Fi.
 
-### 1. При сборке: `config/wifi.env`
+### 1. При сборке: `config/wifi.conf`
 
 ```sh
-cp config/wifi.env.example config/wifi.env
+cp config/wifi.env.example config/wifi.conf
 ```
 
 ```sh
-WIFI_SSID="MyNetwork"
-WIFI_PSK="my passphrase"
-WIFI_COUNTRY=DE
+WIFI_COUNTRY=RU
+WIFI_SSID_1="MyNetwork"
+WIFI_PSK_1="my passphrase"
+WIFI_SSID_2="MyNetwork-5G"
+WIFI_PSK_2="my passphrase"
 ```
 
+- До 8 сетей, нумерация с 1: дом и 5 ГГц того же роутера, телефонная точка доступа и т.п.
+  wpa_supplicant сам выбирает видимую сеть по уровню сигнала.
+- `WIFI_PRIORITY_n` — необязательно: чем больше значение, тем предпочтительнее сеть, когда видны
+  обе (например `WIFI_PRIORITY_2=20` притянет устройство к 5 ГГц).
 - `WIFI_COUNTRY` — ISO 3166-1 alpha-2 или `00` (мировой regulatory domain).
-- `WIFI_PSK` — пароль 8–63 символа (или 64 hex-символа PSK).
-- `config/wifi.env` в `.gitignore`: реальные пароли не попадают в репозиторий.
+- `WIFI_PSK_n` — пароль 8–63 символа (или 64 hex-символа PSK).
+- `config/wifi.conf` в `.gitignore`: реальные пароли не попадают в репозиторий.
 - Если файла нет или в нём остались плейсхолдеры, образ всё равно соберётся: `wpa_supplicant`
-  запустится с пустым конфигом, сеть нужно добавить на устройстве.
+  запустится с конфигом без сетей, сеть нужно добавить на устройстве.
 
-Сборка кладёт сеть в `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` и дублирует значения в
-`/wifi.conf` на FAT-разделе p1.
+Сборка рендерит сети в `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` **только хэшами**
+(`psk=<64 hex>`), сам пароль в образ не попадает. На FAT-раздел p1 он не дублируется сознательно:
+этот раздел лежит открытым текстом и уезжает с любой копией карты или образа. Формат
+`config/wifi.conf` и `/wifi.conf` — один и тот же, рендерит их одна программа
+`/usr/local/sbin/wifi-config-gen`, так что «задал при сборке» и «поправил с ПК» ведут себя
+одинаково.
+
+### Desktop: меню приложений и переключение в ES-DE
+
+|Проблема|Причина|Исправление|
+|---|---|---|
+|Меню приложений (fuzzel) огромное, шире экрана|у панели 640×480 физическая плотность ~200 dpi, а размер шрифта был задан в пунктах (`size=9`): fuzzel рисовал строки ~25 px и окно уезжало за экран. Плюс секция `[dmenu]` содержала `font/lines/width`, которые fuzzel 1.12 не принимает и отказывается стартовать|`font=DejaVu Sans:pixelsize=12` (не зависит от DPI), `lines=6`, `width=30`; из `[dmenu]` лишние ключи убраны|
+|pcmanfm не запускается, на десктопе нет иконок|в `~/.config/labwc/environment` стоял `GDK_BACKEND=wayland`, а pcmanfm — GTK3 X11-only и на Wayland-бэкенде падает с segfault|`GDK_BACKEND` из общего окружения убран; в autostart pcmanfm стартует с `GDK_BACKEND=x11` (XWayland)|
+|ES-DE, запущенная из меню десктопа, не закрывала десктоп, а работала окном внутри labwc|меню показывало `org.es_de.frontend.desktop` из установки ES-DE с `Exec=es-de`, то есть запуск клиентом, а не переключение режима|свой `~/.local/share/applications/org.es_de.frontend.desktop` с `Exec=sudo -n /usr/local/bin/rg35xx-session es` — пункт называется «Games» и переключает сессию|
+|Иконки рабочего стола рисовались в декорированном окне «pcmanfm» в углу|pcmanfm создаёт окно типа `DESKTOP`, а labwc под XWayland управляет им как обычным: рамка, заголовок, размер по содержимому|`~/.config/labwc/rc.xml`: window rule `type="desktop"` → `serverDecoration="no"`, `skipTaskbar`, `Maximize`|
+|Переключение режимов иногда падало (`status=15/TERM`, `1/HUP`) и оставляло `failed`|`Conflicts=` останавливает старую сессию параллельно со стартом новой: labwc успевал взять DRM, пока ES-DE её ещё держала, а старт отменялся. Плюс любой юнит, держащий tty1, ловил SIGHUP от `vhangup()` при остановке getty|переключение идёт через транзиентный юнит `rg35xx-session-apply` (`systemd-run`): сначала `stop` всех остальных режимов, затем `start` нужного, плюс `reset-failed` для остановленных; сессии больше не держат tty1 (`TTYPath/TTYReset` убраны), вывод — в журнал|
+|Курсор в десктопе не управлялся геймпадом|в образе стоял antimicro (Qt5 GUI: окно, трей, ~100 МБ RSS на 1 ГБ RAM). Для «стик → курсор, A/B → клики» он избыточен и вдобавок требует уже поднятого дисплея|`/usr/local/bin/rg35xx-stick-mouse` (stdlib python3, uinput): левый стик → `REL_X/REL_Y` с мёртвой зоной 16 % и кривой `speed*(1.6..)`, A (`BTN_EAST`) → левый клик, B (`BTN_SOUTH`) → правый. Запускается первым в autostart десктопа, геймпад при этом остаётся доступен приложениям. Скорость/зона — константы `MAX_SPEED`, `DEADZONE`, `CURVE` в начале файла|
+|Выход из ES-DE не возвращал в десктоп|quit-скрипт всегда переключал в `terminal`|`rg35xx-session` запоминает предыдущий режим в `/run/rg35xx/previous`, quit-скрипт вызывает `rg35xx-session back`: из десктопа — обратно в десктоп, из загрузки — в консоль|
+|Переключение desktop → ES падало с `status=1/HUP`|`TTYVHangup=yes` в юнитах: `vhangup()` на tty1 слал SIGHUP в `ExecStartPre` следующей сессии, который уже успевал открыть тот же tty|`TTYVHangup` убран из `rg35xx-es/desktop/game`; остаётся `TTYReset`|
+|Изредка ES не успевала остановиться, и старт десктопа отменялся (`code=killed, status=15/TERM`)|ES-DE игнорирует флаг выхода, пока открыт модальный диалог; `TimeoutStopSec=10` не хватало|`TimeoutStopSec=25` у `rg35xx-es.service`|
 
 ### 2. Без перепрошивки: `wifi.conf` на p1
 
 Смонтируйте FAT-раздел карты на ПК (в системе он же `/boot/firmware`) и создайте в корне
-`wifi.conf`:
+`wifi.conf` — то же содержимое, что и в `config/wifi.conf`:
 
 ```sh
-WIFI_SSID="MyNetwork"
-WIFI_PSK="my passphrase"
-WIFI_COUNTRY=DE
+WIFI_COUNTRY=RU
+WIFI_SSID_1="MyNetwork"
+WIFI_PSK_1="my passphrase"
+WIFI_SSID_2="MyNetwork-5G"
+WIFI_PSK_2="my passphrase"
 ```
 
 `wifi-provision.service` выполняется до `wpa_supplicant@wlan0.service` и перегенерирует
@@ -138,14 +165,19 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
 
 ## Запись образа и первый запуск
 
-1. Вставьте SD-карту (8 ГиБ и больше; всё содержимое будет стёрто).
+1. Вставьте SD-карту объёмом больше образа (16 ГиБ и выше — комфортно; всё содержимое будет
+   стёрто). Образ занимает 4624 МиБ, остальное при первом запуске станет разделом `/roms`.
 2. Запишите образ **побитово**, не форматированием:
    - Windows: Rufus 4.x, режим **DD Image**;
    - Linux/macOS: `sudo dd if=out/rg35xxpro-debian.img of=/dev/sdX bs=4M status=progress conv=fsync`
      (проверьте `of=` через `lsblk`/`diskutil list`);
    - либо balenaEtcher.
 3. Вставьте карту в RG35XX Pro и включите питание. Загрузка идёт с p1 (`boot.scr` → `Image` + DTB),
-   через ~20 с на экране появляется ES-DE.
+   через ~20 с на экране появляется ES-DE. При первом запуске `rg35xx-userdata.service` создаёт
+   раздел `/roms` на всё свободное место карты и форматирует его в FAT32 (метка `DATA`), а
+   `rg35xx-userdata-seed.service` раскладывает туда PortMaster, записи `desktop` и каталоги систем.
+   В Windows этот раздел появится как обычная флешка — игры, видео и музыку можно копировать с ПК;
+   переставьте карту после первой загрузки, чтобы Windows увидела новый раздел.
 4. Выйти в консоль: в ES-DE `Quit` → `Terminal` (или «Terminal.sh» в системе `desktop`). Логин:
    `root` / `root`; второй пользователь для аудиосессии — `gamer` / `gamer`. Для ввода на самом
    устройстве нужна USB-клавиатура (OTG) либо UART `ttyS0,115200`; иначе подключайтесь по SSH
@@ -160,6 +192,43 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
 Если что-то не поднялось, выньте карту и прочитайте `boot-report.txt` в корне p1 — там `uname`,
 `/proc/cmdline`, сеть, `wpa_supplicant`, input-устройства и последние 300 строк журнала (в ES
 доступен и `System info`, и `journalctl -u rg35xx-es` через SSH).
+
+## Пользовательский раздел `/roms`
+
+Образ содержит только BOOT и ROOT; игры, видео и музыка живут на отдельном разделе, который
+появляется при первом запуске:
+
+- `rg35xx-userdata.service` берёт из таблицы разделов последний занятый сектор, выравнивает начало
+  по 1 МиБ и создаёт p3 до конца карты. Root в этот момент смонтирован, поэтому полная перечитка
+  таблицы (`BLKRRPART`) отвалилась бы — используется `sfdisk --append --no-tell-kernel` и
+  `partx --add`, которые добавляют только новый раздел;
+- раздел форматируется в FAT32 с меткой `DATA` — именно поэтому Windows видит его как обычную
+  флешку;
+- `roms.mount` (строка в `/etc/fstab`) монтирует его в `/roms` с `uid=1000,gid=1000` и
+  `fmask/dmask=0022`: файлы принадлежат `gamer`, всё исполняемое, как и положено FAT;
+- `rg35xx-userdata-seed.service` раскладывает в `/roms` записи `desktop`, `ports` (PortMaster) и по
+  каталогу на каждую систему. Копируются только отсутствующие записи, поэтому обновления
+  PortMaster и файлы пользователя переживают перезагрузки.
+
+Служба идемпотентна: если p3 уже есть, она ничего не делает. Если карта ровно по размеру образа и
+свободного места меньше 512 МиБ, она пишет в журнал, что делать нечего, и `/roms` остаётся пустым
+каталогом — загрузка не ломается.
+
+Ограничения FAT32: файл больше 4 ГиБ на раздел не поместить, симлинков и прав нет. Переформатировать
+p3 в exFAT можно, но тогда нужно поправить `vfat` на `exfat` в `/etc/fstab`.
+
+Проверка на устройстве:
+
+```sh
+sfdisk -d /dev/mmcblk0 | grep mmcblk0p          # три раздела, p3 до конца карты
+findmnt -o TARGET,FSTYPE,SIZE,OPTIONS /roms     # vfat, весь остаток карты, uid=1000
+df -h /roms
+journalctl -b -u rg35xx-userdata -u roms.mount -u rg35xx-userdata-seed
+```
+
+Скопировать игры/видео с ПК: выключить устройство, вставить карту, открыть в Windows раздел `DATA`
+и положить файлы в нужные каталоги (`/roms/nes`, `/roms/psx`, …). ES-DE читает `ROMDirectory` из
+`es_settings.xml` — там `/roms`.
 
 ## Режимы работы
 
@@ -293,19 +362,20 @@ rootfs, образ), `config/dts/` (DTS платы), `config/patches/` (наши
 |`kernel`|патчи ROCKNIX + наши, наш DTS, `linux.aarch64.conf` + правки, `Image dtbs modules`|`out/Image`, `out/*.dtb`|
 |`rootfs`|debootstrap trixie arm64, пакеты, `config/rootfs`, `device-provision.sh --offline`, модули ядра|`$BUILD_DIR/rootfs`|
 |`frontend`|ES-DE 3.5.0 из исходников под qemu-user (`GLES=ON`, `DEINIT_ON_LAUNCH=ON`), ядра libretro по sha256, PortMaster, патч `es_systems.xml`|`/usr/bin/es-de`, `/usr/share/es-de`, ядра, `/roms/ports/PortMaster`|
-|`image`|`boot.scr` (`panic=10 pstore.backend=ramoops`), FAT32 p1, ext4 p2, MBR|`out/rg35xxpro-debian.img` + `.sha256`|
+|`image`|`boot.scr` (`panic=10 pstore.backend=ramoops`), FAT32 p1, ext4 p2 (4096 МиБ), MBR; образ кончается на p2 — `/roms` создаётся на карте при первом запуске|`out/rg35xxpro-debian.img` + `.sha256`|
 
 Можно перезапускать по одной стадии: `sudo ./build.sh kernel image`; каталог сборки меняется
 переменной `BUILD_DIR=/путь`. Повторный запуск идемпотентен: скачанные архивы проверяются по
 контрольной сумме, патчи помечаются файлом-маркером, apt/rootfs докачиваются.
 
 Параметры сборки, которые легко поменять: `LINUX_VER`, `UBOOT_VER`, `ATF_VER`, `ROCKNIX_TAG`,
-`SHA256`-константы — в начале `build.sh`; Wi-Fi (`config/wifi.env`), DTS и патчи — в `config/`.
+`SHA256`-константы — в начале `build.sh`; Wi-Fi (`config/wifi.conf`), DTS и патчи — в `config/`.
 
 Полная сборка с нуля проверена в изолированной копии репозитория 2026-11-12: `./build.sh`
-доходит до `exit=0`, на выходе `Image`, `u-boot-sunxi-with-spl.bin`, DTB и образ 8 ГиБ. После
-удаления оболочки и переработки Wi-Fi полный прогон не повторялся: изменённые скрипты проверены
-`bash -n`/`sh -n`, а генерация `wpa_supplicant` — с настоящим `wpa_passphrase`.
+доходит до `exit=0`, на выходе `Image`, `u-boot-sunxi-with-spl.bin`, DTB и образ (тогда — 8 ГиБ,
+одним разделом ROOT до конца карты). После перехода на отдельный `/roms` и переработки Wi-Fi полный
+прогон не повторялся: изменённые скрипты проверены `bash -n`/`sh -n`, а создание раздела и раскладка
+seed-дерева прогнаны на loop-устройстве с той же разметкой.
 
 Для режимов ES/Desktop образ целиком ещё не собирался; проверено по частям:
 ES-DE 3.5.0 собирается нативно теми же `cmake`-флагами и списком зависимостей (`es-de --version`
@@ -323,9 +393,13 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
 
 |Раздел|Смещение|Размер|ФС|
 |---|---|---|---|
-|U-Boot (`u-boot-sunxi-with-spl.bin`)|8 КиБ|629 609 Б|raw|
+|U-Boot (`u-boot-sunxi-with-spl.bin`)|8 КиБ|650 089 Б|raw|
 |p1 BOOT|16 МиБ (сектор 32768)|512 МиБ|FAT32: `Image`, DTB, `boot.scr`, `extlinux/extlinux.conf`|
-|p2 ROOT|528 МиБ (сектор 1081344)|до конца|ext4, метка `ROOT`, `/dev/mmcblk0p2`|
+|p2 ROOT|528 МиБ (сектор 1081344)|4096 МиБ|ext4, метка `ROOT`, `/dev/mmcblk0p2`|
+|p3 /roms|4624 МиБ — конец карты|остаток карты|FAT32, метка `DATA`, создаётся при первом запуске|
+
+Образ заканчивается на границе p2: карта всегда больше, и `rg35xx-userdata.service` отдаёт всё
+оставшееся место под `/roms`. Расчёт в `build.sh`: `BOOT_OFFSET_MIB` / `BOOT_MIB` / `ROOT_MIB`.
 
 Загрузка: `boot.scr` (`fatload mmc 0:1` + `booti`) → `Image` + DTB; `extlinux.conf` — резерв для `bootflow scan`.
 
@@ -333,6 +407,14 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
 
 - `sha256sum` исходников совпали с закреплёнными значениями (Linux, U-Boot, TF-A); ROCKNIX tag `20261101` = `cefc1433`.
 - `e2fsck -fn` по root: чисто; `fsck.fat` по p1: чисто; `boot.scr` — валидный `AArch64 Linux Script`.
+- Раздел `/roms` проверен без пересборки образа: `rg35xx-userdata` прогнан на loop-устройстве с той
+  же разметкой в 8 сценариях — создание p3 на карте 12000 МиБ (начало выровнено по 1 МиБ, конец
+  совпадает с концом карты), FAT32 с меткой `DATA`, `fsck.fat` чист, повторный запуск ничего не
+  делает, монтирование с опциями из fstab даёт `uid=1000` и права 755, сидирование раскладывает
+  `desktop`/`ports`/каталоги систем, правки пользователя не затираются, карта ровно по размеру
+  образа и не-блочное устройство обрабатываются без ошибок. `findmnt --verify` по новой строке
+  fstab — 0 ошибок разбора; `systemd-fstab-generator` даёт `roms.mount` с
+  `Requires=`/`After=rg35xx-userdata.service`, юнит попадает в `local-fs.target.wants`.
 - Smoke-boot образа под `qemu-system-aarch64 -M virt` (диск через usb-storage): ядро 7.1.2 поднимается,
   `EXT4-fs (sda2) mounted`, systemd доходит до `multi-user.target`, `ssh.service` и `getty@tty1` — `active`.
 - Собранный DTB: `mmc0 = mmc@4020000` (SD), панель `anbernic,rg35xx-plus-panel` + `panel-mipi-dpi-spi`,
@@ -383,10 +465,10 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
 2. **`wifi-provision` создавал цикл в транзакции systemd** (юнит с `Before=wpa_supplicant@wlan0` вызывал
    `systemctl restart wpa_supplicant@wlan0`) — из ExecStart эта строка убрана; юнит и так стартует после
    провижининга. Дополнительно отключён `systemd-networkd-wait-online.service` (он задерживал вход).
-3. **5 ГГц на rtw88 нестабильно** (и на Knulli тоже — там вендорский BSP-драйвер): в образе
-   прописывается одна сеть из `config/wifi.env`. Если сеть двухдиапазонная, предпочитайте 2.4 ГГц;
-   при необходимости ограничьте каналы через `scan_freq=2412 2437 2462 2472` в блоке `network`.
-   Конкретные SSID в репозиторий не входят.
+3. **5 ГГц на rtw88 нестабильно** (и на Knulli тоже — там вендорский BSP-драйвер): из
+   `config/wifi.conf` в образ попадают все перечисленные сети, но wpa_supplicant выбирает по
+   уровню сигнала. При проблемах с 5 ГГц оставьте только 2.4 ГГц либо ограничьте каналы через
+   `scan_freq=2412 2437 2462 2472` в блоке `network`. Конкретные SSID в репозиторий не входят.
 4. **Диагностика убрана из финального образа**: нет `init=/usr/local/sbin/early-init`, нет
    `boot-marker.service`, нет маркеров в `boot.scr`; `boot.scr` и `extlinux.conf` — обычные.
 5. Проверено на устройстве: `panfrost 1800000.gpu: mali-g31 id 0x7093`,
@@ -457,10 +539,19 @@ power save off, кнопки громкости, калибровка микше
 ## Полевая диагностика (без клавиатуры и сети)
 
 `boot-report.service` (+ таймер) пишет в корень p1 `boot-report.txt`: `uname`, `/proc/cmdline`,
-`ip -br a`, `iw dev`, `iw dev wlan0 link`, `rfkill`, `iw reg get`, состояние юнитов, конфиг
-`wpa_supplicant`, `lsusb`, список input-устройств и последние 300 строк `journalctl -b`. Обновляется
-через 60 с после загрузки, далее каждые 5 минут и при выключении. Достаточно вынуть карту и прочитать
-файл с ПК — UART не нужен.
+`ip -br a`, `iw dev`, `iw dev wlan0 link`, `rfkill`, `networkctl status wlan0`, `wpa_cli status`,
+журнал `wpa_supplicant@wlan0`/`wifi-provision`/`rg35xx-wifi-unblock`, `iw reg get`, состояние
+юнитов, конфиг `wpa_supplicant`, состояние `/roms`, `lsusb`, список input-устройств и последние
+300 строк `journalctl -b`. Отдельно в него попадают три журнала, которых раньше не было:
+
+|Файл|Что содержит|
+|---|---|
+|`/run/rg35xx/desktop.log`|как поднялись waybar/swaybg/pcmanfm, их stderr и кто из них выжил через 3 с|
+|`/run/rg35xx/game.log`|argv запущенного порта/игры, stdout и stderr (иначе tty1 их съедает)|
+|`/roms/ports/PortMaster/log.txt`|собственный лог PortMaster: вывод `pugwash`, трейсбеки Python|
+
+Обновляется через 60 с после загрузки, далее каждые 5 минут и при выключении. Достаточно вынуть
+карту и прочитать файл с ПК — UART не нужен.
 
 Контрольная сумма пишется рядом с образом: `out/rg35xxpro-debian.img.sha256`. Проверка:
 `cd out && sha256sum -c rg35xxpro-debian.img.sha256`.
@@ -517,6 +608,13 @@ power save off, кнопки громкости, калибровка микше
 |Два `WARNING` DRM при загрузке|`panel_mipi_get_modes()` вызывает `drm_connector_set_panel_orientation()`, а DRM core делает это ещё раз через `.get_orientation` → свойство создаётся дважды (`drm_mode_object.c:46`, `:246`). Косметика, но пачкает `dmesg` и ставит taint `W`|убрать вызов из драйвера (не guard, а именно убрать) и проверить, что поворот консоли не поменялся|
 |Wi-Fi: проверено 20 мин непрерывного пинга|300 пингов, потерь нет (единственные 5 подряд — перезагрузка устройства); `wifi-powersave-off.service` держит power save выключенным|нагрузочный тест при активном трафике; при обрывах — `rtw88_core.disable_lps_deep=1`|
 |Suspend выключен|без TF-A `001-allwinner-h616-psci-system-suspend` + `h700-suspend-stub` сон вешает SoC|фаза 5: пересборка TF-A 2.15.0 + заглушка под lpddr3|
+|Wi-Fi не поднимался вообще, хотя конфиг верный|в глобальной секции конфига стоял `powersave=0`. Это не глобальное поле wpa_supplicant: демон писал `Line 4: unknown global field 'powersave=0'`, отказывался читать файл и падал с `status=255`, systemd перезапускал его три раза и сдавался. В журнале это видно сразу|строка убрана из `wifi-config-gen`; LPS rtw88 гасится на уровне драйвера (`wifi-powersave-off.service`). Проверено на живом журнале с карты|
+|Раздел `/roms` не создавался при первом запуске|`sfdisk --append` отказывается менять таблицу диска, разделы которого смонтированы («This disk is currently in use»), а на устройстве смонтирован root — команда падала, p3 не появлялся. На loop-тесте без монтирования проходило, поэтому проверка этого не поймала|`sfdisk --force --no-tell-kernel --append` + `partx --add`; сценарий «root смонтирован» добавлен в проверку|
+|ES-DE: «не может создать /ports»|когда p3 не создан, `/roms` оставался каталогом `root:root 0755`, и `gamer` не мог создать в нём каталоги систем|tmpfiles создаёт `/roms 0775 root gamer`; при смонтированном разделе права даёт `uid=1000,gid=1000`|
+|`user@1000` не стартует → нет PipeWire|в журнале `systemd[402]: Failed to allocate manager object: Permission denied` сразу после `pam_unix(systemd-user:session)`. Пользовательский менеджер поднимается по linger до того, как появился `XDG_RUNTIME_DIR`|tmpfiles создаёт `/run/user/1000 0700 gamer gamer`; `boot-report.txt` теперь печатает статус `user@1000`, права `/run/user`, монтирования cgroup и состояние `pipewire`/`wireplumber` в пользовательской сессии|
+|Wi-Fi не поднимается при верном `wifi.conf`|`wpa_supplicant@wlan0` стартовал раньше, чем rtw88 создавал `wlan0` (firmware грузится позже multi-user), падал с «Failed to initialize interface» и никто его не перезапускал; вдобавок радио могло быть soft-blocked|исправлено: drop-in `wpa_supplicant@wlan0.service.d/10-rg35xx.conf` с `After=sys-subsystem-net-devices-wlan0.device`, `Restart=on-failure` и юнит `rg35xx-wifi-unblock` (`rfkill unblock all`). Диагностика — `rfkill list` и журнал в `boot-report.txt`|
+|PortMaster закрывается сразу|вывод `pugwash` уходил в tty1 и терялся|логи теперь в `/roms/ports/PortMaster/log.txt` (FAT, читается с ПК) и `/run/rg35xx/game.log`, оба дублируются в `boot-report.txt`; `/dev/tty0` открыт на запись (udev-правило), PortMaster больше не спотыкается о свой `printf` в консоль|
+|Desktop: только курсор и меню labwc|клиенты autostart'а стартовали без логов и могли получить `SIGTTIN` (stdin — tty1), а также раньше готового Wayland-сокета|`rg35xx-desktop-autostart` ждёт сокет, запускает клиентов с `</dev/null`, пишет `desktop.log` и состояние через 3 с|
 |Громкость: потолок средний|`DAC` уже на 0 дБ; остальное — `Line Out`, которым управляет WirePlumber из громкости sink (100 % = 31 = 0 дБ)|если мало — sink на 100 %; больше запаса нет, только внешний усилитель наушников|
 
 ## Звук: что проверено на железе

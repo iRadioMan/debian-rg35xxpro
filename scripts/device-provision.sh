@@ -141,21 +141,13 @@ fi
 
 say "7b. schedutil CPU governor, capped journal (flash wear on a handheld)"
 # ROCKNIX's H700 kernel config pins every policy to "performance" (1416 MHz at all times): steady
-# heat and battery drain. schedutil scales 480..1416 MHz on demand.
-cat > /etc/systemd/system/rg35xx-cpu-governor.service <<'EOF'
-[Unit]
-Description=RG35XX Pro: schedutil CPU governor instead of the pinned performance default
-After=sysinit.target
-Before=multi-user.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh -c 'for p in /sys/devices/system/cpu/cpufreq/policy*; do [ -w "$p/scaling_governor" ] && echo schedutil > "$p/scaling_governor"; done'
-
-[Install]
-WantedBy=multi-user.target
-EOF
+# heat and battery drain. schedutil scales 480..1416 MHz on demand. The unit ships as an overlay
+# file, config/rootfs/etc/systemd/system/rg35xx-cpu-governor.service: a second copy here ran after
+# the overlay and silently overwrote it, so the two were free to drift apart.
+if [ ! -s /etc/systemd/system/rg35xx-cpu-governor.service ]; then
+  echo "rg35xx-cpu-governor.service is missing: the rootfs overlay was not installed" >&2
+  exit 1
+fi
 mkdir -p /etc/systemd/system/multi-user.target.wants
 ln -sfn ../rg35xx-cpu-governor.service /etc/systemd/system/multi-user.target.wants/rg35xx-cpu-governor.service
 run systemctl daemon-reload

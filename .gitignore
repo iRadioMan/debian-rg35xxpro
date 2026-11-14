@@ -3,6 +3,7 @@
 
 # Real Wi-Fi credentials; the committed template is config/wifi.env.example
 /config/wifi.env
+/config/wifi.conf
 
 # Editors / OS
 *~
