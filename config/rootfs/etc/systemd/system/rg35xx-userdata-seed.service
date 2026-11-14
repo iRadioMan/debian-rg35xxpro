@@ -1,9 +1,13 @@
 [Unit]
-Description=RG35XX Pro: seed /roms with the desktop entries, PortMaster and system directories
+Description=RG35XX Pro: seed the roms/ directory of the user-data partition
 Documentation=file:///usr/local/share/rg35xxpro/README.md
-Requires=roms.mount
-After=roms.mount
-ConditionPathIsMountPoint=/roms
+# The partition itself: /mnt/userdata/roms is the bind source of /roms, and this unit creates it.
+# When the partition is missing (first boot, card too small) the unit is skipped and roms.mount
+# with it, so /roms stays the plain directory tmpfiles made instead of a bind onto the rootfs.
+Requires=mnt-userdata.mount
+After=mnt-userdata.mount
+Before=roms.mount
+ConditionPathIsMountPoint=/mnt/userdata
 
 [Service]
 Type=oneshot

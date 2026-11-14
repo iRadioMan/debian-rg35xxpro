@@ -1,12 +1,16 @@
 #!/bin/sh
-# Create the /roms user-data partition on first boot.
+# Create the user-data partition on first boot.
 #
 # The image carries only BOOT (p1) and ROOT (p2). A card is always bigger than the image, so after
 # flashing there is unused space at the end; this script turns all of it into p3, formatted FAT32 so
 # Windows can open the card and games, videos and music can be copied straight onto it.
 #
-# Idempotent: an existing p3 is left untouched. It runs before roms.mount (x-systemd.requires in
-# fstab), so the mount unit finds the device already there.
+# The partition is mounted at /mnt/userdata and holds one roms/ directory, exposed as /roms by a
+# bind mount (fstab): on a PC the card then shows "roms" at its root instead of the system
+# directories ES-DE creates inside it.
+#
+# Idempotent: an existing p3 is left untouched. It runs before mnt-userdata.mount
+# (x-systemd.requires in fstab), so the mount unit finds the device already there.
 set -eu
 
 DEV=${RG35XX_USERDATA_DEV:-/dev/mmcblk0}

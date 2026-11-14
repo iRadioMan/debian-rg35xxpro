@@ -4,7 +4,7 @@ Documentation=file:/root/README.md
 # One VT, one session: every other mode conflicts with this one, so a switch always tears the
 # old stack down instead of running two DRM clients on a 1 GiB machine.
 Conflicts=rg35xx-desktop.service rg35xx-terminal.service rg35xx-game.service getty@tty1.service
-After=systemd-user-sessions.service sound.target network.target rg35xx-userdata-seed.service
+After=systemd-user-sessions.service sound.target network.target rg35xx-userdata-seed.service roms.mount
 Wants=sound.target network.target
 # No OnFailure=: the ExecStopPost helper already decides where a session that ended on its
 # own should go, and a failure *during a switch* would make it start a third session that

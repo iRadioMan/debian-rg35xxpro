@@ -1,24 +1,29 @@
 #!/bin/sh
-# Fill a freshly created /roms with what the system itself provides: the ES-DE "desktop" entries,
-# the PortMaster launcher and release, and one directory per emulated system.
+# Fill the roms/ directory of the user-data partition with what the system itself provides: the
+# ES-DE "desktop" entries, the PortMaster launcher and release, and one directory per emulated
+# system.
+#
+# The partition is mounted at /mnt/userdata and only roms/ inside it is visible as /roms (bind in
+# fstab), so the card shows a single "roms" folder on a PC. This script also creates that directory:
+# it is the bind source, and roms.mount requires this unit for exactly that reason.
 #
 # Only missing entries are copied, so PortMaster's own updates and anything the user put there
 # survive every later boot.
 set -eu
 
 SEED=${RG35XX_SEED:-/usr/share/rg35xx/roms-seed}
-TARGET=${RG35XX_ROMS:-/roms}
+DATA=${RG35XX_DATA:-/mnt/userdata}
+TARGET=$DATA/roms
 
 if [ ! -d "$SEED" ]; then
   exit 0
 fi
-if [ ! -d "$TARGET" ]; then
+if ! mountpoint -q "$DATA"; then
+  printf 'rg35xx-userdata-seed: %s is not a mount point, skipping\n' "$DATA" >&2
   exit 0
 fi
-if ! mountpoint -q "$TARGET"; then
-  printf 'rg35xx-userdata-seed: %s is not a mount point, skipping\n' "$TARGET" >&2
-  exit 0
-fi
+
+install -d -m 0755 "$TARGET"
 
 copy_missing() { # source destination
   if [ ! -e "$2" ]; then

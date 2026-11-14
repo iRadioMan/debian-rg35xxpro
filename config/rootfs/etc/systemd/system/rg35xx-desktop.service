@@ -1,7 +1,7 @@
 [Unit]
 Description=RG35XX Pro: labwc desktop on tty1
 Conflicts=rg35xx-es.service rg35xx-terminal.service rg35xx-game.service getty@tty1.service
-After=seatd.service bluetooth.service sound.target network.target rg35xx-userdata-seed.service
+After=seatd.service bluetooth.service sound.target network.target rg35xx-userdata-seed.service roms.mount
 Wants=seatd.service bluetooth.service sound.target
 # No OnFailure=: the ExecStopPost helper already decides where a session that ended on its
 # own should go, and a failure *during a switch* would make it start a third session that

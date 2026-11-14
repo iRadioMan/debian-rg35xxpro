@@ -120,17 +120,25 @@ for d in /roms/ports /roms/desktop /roms/nes /roms/snes /roms/psx; do
   [ -d "$d" ] || bad "missing $d"
 done
 
-sec "user-data partition (/roms)"
+sec "user-data partition (/mnt/userdata -> /roms)"
 nparts=$(sfdisk -d /dev/mmcblk0 2>/dev/null | grep -c '^/dev/mmcblk0p')
 if [ "${nparts:-0}" -ge 3 ]; then
   ok "/dev/mmcblk0 has $nparts partitions, user-data is there"
 else
   bad "/dev/mmcblk0 has ${nparts:-0} partitions: rg35xx-userdata did not create p3"
 fi
-fstype=$(findmnt -n -o FSTYPE /roms 2>/dev/null || true)
-[ "$fstype" = vfat ] && ok "/roms is mounted FAT (visible in Windows)" || bad "/roms is not a FAT mount (fstype: ${fstype:-none})"
-findmnt -n -o OPTIONS /roms 2>/dev/null | grep -q 'uid=1000' &&
-  ok "/roms belongs to gamer" || bad "/roms mount options lack uid=1000"
+fstype=$(findmnt -n -o FSTYPE /mnt/userdata 2>/dev/null || true)
+[ "$fstype" = vfat ] && ok "/mnt/userdata is mounted FAT (visible in Windows)" ||
+  bad "/mnt/userdata is not a FAT mount (fstype: ${fstype:-none})"
+[ -d /mnt/userdata/roms ] && ok "partition root carries roms/ (one folder on the card)" ||
+  bad "/mnt/userdata/roms is missing: a PC would show the system directories at the root of the card"
+source=$(findmnt -n -o SOURCE /roms 2>/dev/null || true)
+case "$source" in
+  *'[/roms]') ok "/roms is a bind of the partition's roms/ ($source)" ;;
+  *) bad "/roms is not a bind from /mnt/userdata/roms (source: ${source:-none})" ;;
+esac
+findmnt -n -o OPTIONS /mnt/userdata 2>/dev/null | grep -q 'uid=1000' &&
+  ok "user-data belongs to gamer" || bad "/mnt/userdata mount options lack uid=1000"
 [ -w /roms ] && ok "/roms is writable" || bad "/roms is not writable"
 last3=$(sfdisk -d /dev/mmcblk0 2>/dev/null | sed -n 's|^/dev/mmcblk0p3 *:.*start= *\([0-9]*\), *size= *\([0-9]*\).*|\1 \2|p')
 if [ -n "$last3" ]; then

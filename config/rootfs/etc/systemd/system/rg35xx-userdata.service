@@ -1,16 +1,18 @@
 [Unit]
-Description=RG35XX Pro: create the /roms user-data partition on first boot
+Description=RG35XX Pro: create the user-data partition on first boot
 Documentation=file:///usr/local/share/rg35xxpro/README.md
-# DefaultDependencies=no is required: this has to run inside local-fs.target, before roms.mount,
-# and a normal service would be ordered after basic.target — after the mount it must precede.
+# DefaultDependencies=no is required: this has to run inside local-fs.target, before the mount, and
+# a normal service would be ordered after basic.target — after the mount it must precede.
 DefaultDependencies=no
 After=local-fs-pre.target
-Before=roms.mount
-ConditionPathIsMountPoint=!/roms
+Before=mnt-userdata.mount
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Idempotent on its own: the script leaves an existing partition alone (it checks for a filesystem
+# signature), so no Condition covers the "already done" case — a condition on the mount point would
+# be false anyway, this unit runs before the partition is mounted by design.
 ExecStart=/usr/local/sbin/rg35xx-userdata
 
 [Install]

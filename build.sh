@@ -368,10 +368,16 @@ EOF
   # going when the partition does not exist yet (first boot) or the card is too small.
   # uid/gid 1000 + fmask/dmask 0022: gamer owns the files and everything on FAT looks executable,
   # which is what the PortMaster and ES-DE launchers need on a filesystem without permissions.
+  # Two-stage: the data partition is mounted at /mnt/userdata and only its roms/ directory appears
+  # as /roms (bind), so a PC shows one "roms" folder on the card instead of a partition root full of
+  # system directories. The bind source is created by rg35xx-userdata-seed.service, hence the
+  # requirement on it; when the partition does not exist (first boot, card too small) that unit is
+  # skipped, roms.mount is skipped with it, and /roms stays the empty directory tmpfiles creates.
   printf '%b\n' \
     '/dev/mmcblk0p2\t/\text4\tdefaults,noatime,commit=120,errors=remount-ro\t0 1' \
     '/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,noatime,nofail\t0 2' \
-    '/dev/mmcblk0p3\t/roms\tvfat\tnoatime,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,utf8=1,iocharset=utf8,x-systemd.requires=rg35xx-userdata.service,x-systemd.after=rg35xx-userdata.service,x-systemd.device-timeout=10\t0 0' \
+    '/dev/mmcblk0p3\t/mnt/userdata\tvfat\tnoatime,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,utf8=1,iocharset=utf8,x-systemd.requires=rg35xx-userdata.service,x-systemd.after=rg35xx-userdata.service,x-systemd.device-timeout=10\t0 0' \
+    '/mnt/userdata/roms\t/roms\tnone\tbind,x-systemd.requires=rg35xx-userdata-seed.service,x-systemd.after=rg35xx-userdata-seed.service\t0 0' \
     'tmpfs\t/tmp\ttmpfs\tdefaults,noatime,nosuid,nodev,size=256M,mode=1777\t0 0' \
     > "$ROOTFS/etc/fstab"
   echo 'root:root' | chroot "$ROOTFS" chpasswd
