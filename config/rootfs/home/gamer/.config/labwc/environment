@@ -1,6 +1,9 @@
 # Session-wide environment for labwc (read before any autostart program starts).
 XCURSOR_THEME=Adwaita
 XCURSOR_SIZE=24
+# Firefox and Qt apps on Wayland; do not force GDK_BACKEND globally: pcmanfm is a GTK3 X11-only
+# program and a forced Wayland backend makes it segfault on startup. GTK auto-detects, and the one
+# client that must stay on X11 (pcmanfm, started by rg35xx-desktop-autostart) gets GDK_BACKEND=x11
+# there.
 MOZ_ENABLE_WAYLAND=1
 QT_QPA_PLATFORM=wayland
-GDK_BACKEND=wayland

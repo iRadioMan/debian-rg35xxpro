@@ -12,9 +12,23 @@ OUT=/boot/firmware/boot-report.txt
   echo "--- iw dev ---"; iw dev 2>&1 | head -40
   echo "--- iw link ---"; iw dev wlan0 link 2>&1 | head -20
   echo "--- rfkill ---"; rfkill list 2>&1 | head -20
+  echo "--- networkctl ---"; networkctl status wlan0 --no-pager 2>&1 | head -25
+  echo "--- supplicant unit ---"; systemctl is-active wpa_supplicant@wlan0 wifi-provision rg35xx-wifi-unblock 2>&1
+  echo "--- wpa_cli ---"; wpa_cli -i wlan0 status 2>&1 | head -15
+  echo "--- wifi journal ---"
+  journalctl -b -n 80 --no-pager -u wpa_supplicant@wlan0 -u wifi-provision -u rg35xx-wifi-unblock 2>&1
   echo "--- regulatory ---"; iw reg get 2>&1 | head -20
   echo "--- units ---"; systemctl is-active ssh systemd-networkd systemd-resolved wpa_supplicant@wlan0 2>&1
+  echo "--- user manager ---"; systemctl is-active user@1000 2>&1
+  systemctl status user@1000 --no-pager -n 8 2>&1 | head -20
+  echo "--- runtime dir ---"; ls -ld /run/user /run/user/1000 2>&1
+  echo "--- cgroup mounts ---"; mount | grep -E 'cgroup' 2>&1 | head -6
+  echo "--- user units ---"; systemctl --user -M gamer@ is-active pipewire wireplumber 2>&1 | head -5
   echo "--- wpa_supplicant cfg ---"; head -20 /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>&1
+  echo "--- userdata ---"; findmnt /roms 2>&1; df -h /roms 2>&1
+  echo "--- desktop session log ---"; cat /run/rg35xx/desktop.log 2>&1 | tail -60
+  echo "--- game log ---"; tail -60 /run/rg35xx/game.log 2>&1
+  echo "--- portmaster log ---"; tail -60 /roms/ports/PortMaster/log.txt 2>&1
   echo "--- usb ---"; lsusb 2>&1 | head -20
   echo "--- input devices ---"; grep -E '^N:|^H:' /proc/bus/input/devices 2>&1 | head -40
   echo "--- recent journal (300 lines) ---"

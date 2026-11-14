@@ -16,6 +16,14 @@ fi
 
 mapfile -d '' -t a < "$args"
 
+# Keep what the game or the port prints: tty1 owns the screen, so stdout would otherwise vanish,
+# and PortMaster's instant exit is only visible in this log.
+log=/run/rg35xx/game.log
+: > "$log" 2>/dev/null || true
+exec >> "$log" 2>&1
+echo "=== rg35xx-game-exec $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+printf 'argv: %s\n' "${a[*]}"
+
 if [ "${a[0]:-}" = "--sh" ]; then
   cd "${a[2]}"
   exec /bin/bash "${a[1]}"

@@ -1,0 +1,101 @@
+#!/bin/sh
+# Render a wpa_supplicant configuration from a Wi-Fi settings file.
+#
+#   sh wifi-config-gen /path/to/wifi.env > /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+#
+# Pure function: reads one file, writes the rendered config to stdout, changes nothing else. The
+# image build and wifi-provision.service both call it, so the file format has exactly one
+# implementation and the two cannot drift apart.
+#
+# The settings file is shell syntax and can describe several networks, numbered from 1:
+#
+#   WIFI_COUNTRY=RU
+#   WIFI_SSID_1="Radik"    WIFI_PSK_1="secret"
+#   WIFI_SSID_2="Radik5G"  WIFI_PSK_2="secret"   WIFI_PRIORITY_2=20
+#
+# A bare WIFI_SSID/WIFI_PSK pair (the original single-network format) is read as network 1.
+# Networks whose SSID or passphrase is still a placeholder are skipped; a file with no usable
+# network renders the header only, which is what a freshly flashed image ships.
+set -eu
+
+env=${1:-/boot/firmware/wifi.conf}
+MAX_NETWORKS=8
+
+if [ -r "$env" ]; then
+  # shellcheck disable=SC1090
+  . "$env"
+fi
+
+clean() { printf '%s' "${1:-}" | tr -d '\r'; }
+
+country=$(clean "${WIFI_COUNTRY:-}")
+if [ -z "$country" ]; then
+  country=00
+fi
+
+# The original single-network spelling, understood as network 1.
+if [ -z "$(clean "${WIFI_SSID_1:-}")" ] && [ -n "$(clean "${WIFI_SSID:-}")" ]; then
+  WIFI_SSID_1=$(clean "${WIFI_SSID:-}")
+  WIFI_PSK_1=$(clean "${WIFI_PSK:-}")
+  WIFI_PRIORITY_1=$(clean "${WIFI_PRIORITY:-}")
+fi
+
+placeholder() {
+  case "${1:-}" in
+    "" | YOUR_SSID | YOUR_PASSPHRASE | CHANGEME) return 0 ;;
+  esac
+  return 1
+}
+
+printf 'country=%s\n' "$country"
+printf 'ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\n'
+printf 'update_config=1\n'
+# No "powersave" here: it is not a global wpa_supplicant field, and a stray one makes the daemon
+# reject the whole file ("Line 4: unknown global field 'powersave=0'" -> exit 255). The rtw88
+# low-power state is turned off at the driver level by wifi-powersave-off.service instead.
+
+i=1
+while [ "$i" -le "$MAX_NETWORKS" ]; do
+  eval "ssid_raw=\${WIFI_SSID_$i:-}"
+  eval "psk_raw=\${WIFI_PSK_$i:-}"
+  eval "priority_raw=\${WIFI_PRIORITY_$i:-}"
+  i=$((i + 1))
+
+  ssid=$(clean "$ssid_raw")
+  psk=$(clean "$psk_raw")
+  priority=$(clean "$priority_raw")
+
+  if placeholder "$ssid"; then
+    continue
+  fi
+  if placeholder "$psk"; then
+    continue
+  fi
+
+  # wpa_supplicant's quoted strings: only \ and " carry meaning.
+  escaped=$(printf '%s' "$ssid" | sed -e 's/[\\"]/\\&/g')
+
+  # A 64 character hex string is the PSK itself; anything else is a passphrase, which gets hashed
+  # here so the plaintext never lands in the image.
+  hashed=
+  if [ "${#psk}" -eq 64 ]; then
+    case "$psk" in
+      *[!0-9a-fA-F]*) ;;
+      *) hashed=$psk ;;
+    esac
+  fi
+  if [ -z "$hashed" ]; then
+    hashed=$(wpa_passphrase "$ssid" "$psk" 2>/dev/null |
+      sed -n 's/^[[:space:]]*psk=//p' | head -1) || true
+  fi
+  if [ -z "$hashed" ]; then
+    printf 'wifi-config-gen: wpa_passphrase refused the passphrase for "%s"\n' "$ssid" >&2
+    exit 1
+  fi
+
+  printf '\nnetwork={\n\tssid="%s"\n\tpsk=%s\n' "$escaped" "$hashed"
+  if [ -n "$priority" ]; then
+    printf '\tpriority=%s\n' "$priority"
+  fi
+  printf '}\n'
+done

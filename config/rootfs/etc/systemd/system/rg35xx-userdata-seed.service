@@ -1,0 +1,14 @@
+[Unit]
+Description=RG35XX Pro: seed /roms with the desktop entries, PortMaster and system directories
+Documentation=file:///usr/local/share/rg35xxpro/README.md
+Requires=roms.mount
+After=roms.mount
+ConditionPathIsMountPoint=/roms
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rg35xx-userdata-seed
+
+[Install]
+WantedBy=multi-user.target

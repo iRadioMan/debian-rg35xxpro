@@ -1,0 +1,189 @@
+#!/usr/bin/python3
+"""Desktop-mode mouse from the H700 gamepad.
+
+Left analog stick moves the pointer, A and B click (left/right). Started by the desktop session's
+autostart and stopped with it, so games and ES-DE keep the raw gamepad.
+
+Deliberately not AntimicroX: its GUI is Qt5, needs a display, keeps a tray icon and costs ~100 MB
+RSS on a 1 GB device just to translate two axes and two buttons. This is the same mapping in
+~150 lines of stdlib Python, with a deterministic startup and no window.
+
+Only the pad is read; the gamepad stays usable by every application in the session.
+"""
+
+import fcntl
+import os
+import select
+import signal
+import struct
+import sys
+
+PAD_NAME = "H700 Gamepad"
+MOUSE_NAME = "rg35xx-mouse"
+
+EV_SYN, EV_KEY, EV_REL, EV_ABS = 0x00, 0x01, 0x02, 0x03
+
+BTN_SOUTH, BTN_EAST = 0x130, 0x131          # physical B, physical A (see the board DTS)
+BTN_LEFT, BTN_RIGHT = 0x110, 0x111
+REL_X, REL_Y = 0x00, 0x01
+ABS_X, ABS_Y = 0x00, 0x01
+
+EVENT = struct.Struct("llHHi")              # struct input_event on 64-bit
+ABSINFO = struct.Struct("iiiiii")
+UINPUT_SETUP = struct.Struct("HHHH80sI")    # input_id + name[80] + ff_effects_max
+
+UI_DEV_SETUP = 0x405C5503
+UI_DEV_CREATE = 0x5501
+UI_DEV_DESTROY = 0x5502
+UI_SET_EVBIT = 0x40045564
+UI_SET_KEYBIT = 0x40045565
+UI_SET_RELBIT = 0x40045566
+EVIOCGABS = 0x80184540
+
+DEADZONE = 0.16        # fraction of full deflection that is ignored
+MAX_SPEED = 720.0      # pixels per second at full deflection
+CURVE = 1.7            # exponent: low deflections move slowly, high ones fast
+TICK = 0.016           # ~60 Hz
+
+
+def find_event(name):
+    """Return /dev/input/eventN whose device is called `name`, or None."""
+    entry = {}
+    try:
+        with open("/proc/bus/input/devices", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("N: Name="):
+                    entry = {"name": line.split("=", 1)[1].strip().strip('"')}
+                elif line.startswith("H: Handlers=") and entry.get("name") == name:
+                    for token in line.split("=", 1)[1].split():
+                        if token.startswith("event"):
+                            return "/dev/input/" + token
+    except OSError:
+        return None
+    return None
+
+
+def abs_range(fd, axis):
+    buf = bytearray(ABSINFO.size)
+    fcntl.ioctl(fd, EVIOCGABS + axis, buf, True)
+    _, minimum, maximum, _, _, _ = ABSINFO.unpack(buf)
+    return minimum, maximum
+
+
+def open_mouse():
+    fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_REL)
+    fcntl.ioctl(fd, UI_SET_KEYBIT, BTN_LEFT)
+    fcntl.ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT)
+    fcntl.ioctl(fd, UI_SET_RELBIT, REL_X)
+    fcntl.ioctl(fd, UI_SET_RELBIT, REL_Y)
+    setup = UINPUT_SETUP.pack(0x19, 0x1, 0x1, 0x1, MOUSE_NAME.encode(), 0)
+    fcntl.ioctl(fd, UI_DEV_SETUP, setup, True)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    return fd
+
+
+def emit(fd, kind, code, value):
+    os.write(fd, EVENT.pack(0, 0, kind, code, value))
+
+
+class Mapper:
+    def __init__(self, pad_path, mouse_fd):
+        self.pad = os.open(pad_path, os.O_RDONLY | os.O_NONBLOCK)
+        self.mouse = mouse_fd
+        self.xmin, self.xmax = abs_range(self.pad, ABS_X)
+        self.ymin, self.ymax = abs_range(self.pad, ABS_Y)
+        self.x = 0.0
+        self.y = 0.0
+        self.running = True
+
+    def normalise(self, value, minimum, maximum):
+        if value >= 0 and maximum:
+            return min(1.0, value / float(maximum))
+        if value < 0 and minimum:
+            return max(-1.0, value / float(-minimum))
+        return 0.0
+
+    def handle(self, kind, code, value):
+        if kind == EV_ABS:
+            if code == ABS_X:
+                self.x = self.normalise(value, self.xmin, self.xmax)
+            elif code == ABS_Y:
+                self.y = self.normalise(value, self.ymin, self.ymax)
+        elif kind == EV_KEY and value in (0, 1):
+            if code == BTN_EAST:
+                emit(self.mouse, EV_KEY, BTN_LEFT, value)
+                emit(self.mouse, EV_SYN, 0, 0)
+            elif code == BTN_SOUTH:
+                emit(self.mouse, EV_KEY, BTN_RIGHT, value)
+                emit(self.mouse, EV_SYN, 0, 0)
+
+    def drain(self):
+        while True:
+            try:
+                data = os.read(self.pad, EVENT.size * 64)
+            except BlockingIOError:
+                return
+            except OSError:
+                self.running = False
+                return
+            if not data:
+                return
+            for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                _, _, kind, code, value = EVENT.unpack_from(data, offset)
+                self.handle(kind, code, value)
+
+    def step(self):
+        dx = dy = 0
+        for value, out in ((self.x, "dx"), (self.y, "dy")):
+            magnitude = abs(value)
+            if magnitude <= DEADZONE:
+                continue
+            speed = MAX_SPEED * ((magnitude - DEADZONE) / (1.0 - DEADZONE)) ** CURVE
+            delta = int(round(speed * TICK)) * (1 if value > 0 else -1)
+            if out == "dx":
+                dx = delta
+            else:
+                dy = delta
+        if dx or dy:
+            if dx:
+                emit(self.mouse, EV_REL, REL_X, dx)
+            if dy:
+                emit(self.mouse, EV_REL, REL_Y, dy)
+            emit(self.mouse, EV_SYN, 0, 0)
+
+    def run(self):
+        while self.running:
+            select.select([self.pad], [], [], TICK)
+            self.drain()
+            self.step()
+        os.close(self.pad)
+
+
+def main():
+    pad = os.environ.get("RG35XX_PAD")
+    if pad is None or pad == "":
+        pad = find_event(PAD_NAME)
+    if not pad or not os.path.exists(pad):
+        print("rg35xx-stick-mouse: no %r device found" % PAD_NAME, file=sys.stderr)
+        return 1
+
+    mouse = open_mouse()
+    mapper = Mapper(pad, mouse)
+
+    def stop(_signum, _frame):
+        mapper.running = False
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        mapper.run()
+    finally:
+        fcntl.ioctl(mouse, UI_DEV_DESTROY)
+        os.close(mouse)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

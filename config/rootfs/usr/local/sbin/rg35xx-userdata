@@ -1,0 +1,78 @@
+#!/bin/sh
+# Create the /roms user-data partition on first boot.
+#
+# The image carries only BOOT (p1) and ROOT (p2). A card is always bigger than the image, so after
+# flashing there is unused space at the end; this script turns all of it into p3, formatted FAT32 so
+# Windows can open the card and games, videos and music can be copied straight onto it.
+#
+# Idempotent: an existing p3 is left untouched. It runs before roms.mount (x-systemd.requires in
+# fstab), so the mount unit finds the device already there.
+set -eu
+
+DEV=${RG35XX_USERDATA_DEV:-/dev/mmcblk0}
+PART=3
+MIN_MIB=512
+
+log() { printf 'rg35xx-userdata: %s\n' "$*" >&2; }
+
+case "$DEV" in
+  *[0-9]) partdev="${DEV}p${PART}" ;;
+  *) partdev="${DEV}${PART}" ;;
+esac
+
+if [ ! -b "$DEV" ]; then
+  log "$DEV is not a block device; nothing to do"
+  exit 0
+fi
+
+if blkid -p "$partdev" >/dev/null 2>&1; then
+  log "$partdev already carries a filesystem; leaving it alone"
+  exit 0
+fi
+
+# Highest occupied sector, taken from the partition table itself rather than from constants, so a
+# future layout change cannot make this overlap the root filesystem.
+total=$(blockdev --getsz "$DEV")
+max_end=0
+for line in $(sfdisk -d "$DEV" | sed -n 's/.*start= *\([0-9][0-9]*\), *size= *\([0-9][0-9]*\).*/\1:\2/p'); do
+  start=${line%%:*}
+  size=${line##*:}
+  end=$((start + size - 1))
+  if [ "$end" -gt "$max_end" ]; then
+    max_end=$end
+  fi
+done
+
+# 1 MiB alignment: what every partitioning tool expects, and what mkfs.vfat likes best.
+start=$(( ((max_end + 1 + 2047) / 2048) * 2048 ))
+free_mib=$(( (total - start) / 2048 ))
+
+if [ "$free_mib" -lt "$MIN_MIB" ]; then
+  log "only ${free_mib} MiB are unpartitioned after the root filesystem; not creating /roms"
+  exit 0
+fi
+
+log "creating partition $PART: sectors $start..$((total - 1)), ${free_mib} MiB"
+# --force: sfdisk refuses to touch a disk whose partitions are mounted ("This disk is currently in
+# use") — on the device that is the root filesystem, so without it the partition is never created.
+# --no-tell-kernel: root is mounted, a full table re-read (BLKRRPART) would be refused anyway;
+# partx below adds just the new partition with BLKPG_ADD_PARTITION, which works on a live device.
+sfdisk --force --no-tell-kernel --append "$DEV" >/dev/null <<EOF
+start=$start, type=c
+EOF
+partx --add --nr "$PART" "$DEV" 2>/dev/null || true
+udevadm settle --timeout=15 || true
+
+i=0
+while [ ! -b "$partdev" ] && [ "$i" -lt 20 ]; do
+  sleep 0.5
+  i=$((i + 1))
+done
+if [ ! -b "$partdev" ]; then
+  log "$partdev did not appear in the kernel; it will be ready after a reboot"
+  exit 1
+fi
+
+log "formatting $partdev as FAT32, label DATA"
+mkfs.vfat -F 32 -n DATA "$partdev" >/dev/null
+log "done"

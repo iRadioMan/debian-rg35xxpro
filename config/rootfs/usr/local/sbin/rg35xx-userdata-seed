@@ -1,0 +1,44 @@
+#!/bin/sh
+# Fill a freshly created /roms with what the system itself provides: the ES-DE "desktop" entries,
+# the PortMaster launcher and release, and one directory per emulated system.
+#
+# Only missing entries are copied, so PortMaster's own updates and anything the user put there
+# survive every later boot.
+set -eu
+
+SEED=${RG35XX_SEED:-/usr/share/rg35xx/roms-seed}
+TARGET=${RG35XX_ROMS:-/roms}
+
+if [ ! -d "$SEED" ]; then
+  exit 0
+fi
+if [ ! -d "$TARGET" ]; then
+  exit 0
+fi
+if ! mountpoint -q "$TARGET"; then
+  printf 'rg35xx-userdata-seed: %s is not a mount point, skipping\n' "$TARGET" >&2
+  exit 0
+fi
+
+copy_missing() { # source destination
+  if [ ! -e "$2" ]; then
+    cp -RL "$1" "$2"
+  fi
+}
+
+copy_missing "$SEED/desktop" "$TARGET/desktop"
+
+mkdir -p "$TARGET/ports"
+for item in "$SEED/ports"/*; do
+  if [ -e "$item" ]; then
+    copy_missing "$item" "$TARGET/ports/${item##*/}"
+  fi
+done
+
+for dir in "$SEED/systems"/*; do
+  if [ -d "$dir" ]; then
+    mkdir -p "$TARGET/${dir##*/}"
+  fi
+done
+
+sync

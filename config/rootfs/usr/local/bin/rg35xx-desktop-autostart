@@ -1,0 +1,56 @@
+#!/bin/sh
+# Start the desktop session's clients and record why any of them fails.
+#
+# A session that shows nothing but the cursor is impossible to debug without a keyboard: labwc
+# itself keeps running and its root menu works, while waybar/swaybg/pcmanfm may have died at once.
+# Everything they print goes to /run/rg35xx/desktop.log, which boot-report.service copies to the
+# FAT partition (boot-report.txt), so the failure can be read from any PC.
+set -u
+
+log=/run/rg35xx/desktop.log
+: > "$log"
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000}
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+
+{
+  echo "=== autostart $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="
+  echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+} >> "$log"
+
+# labwc runs this before the compositor has finished creating its socket; clients started too early
+# die with "failed to connect to display".
+i=0
+while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && [ "$i" -lt 50 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+
+start() { # name command...
+  name=$1
+  shift
+  # stdin from /dev/null: the service owns tty1, and a background client that reads the terminal
+  # gets SIGTTIN and stops — which looks exactly like "the client never started".
+  "$@" >> "$log" 2>&1 < /dev/null &
+  printf '%s: started as pid %s\n' "$name" "$!" >> "$log"
+}
+
+start waybar waybar
+start swaybg swaybg -c '#1e1e2e'
+# Left stick -> pointer, A/B -> left/right click. Started first so the mouse works the moment the
+# session appears.
+start stick-mouse rg35xx-stick-mouse
+# pcmanfm is a GTK3 X11-only program: on the Wayland backend it segfaults immediately, so it is
+# started on XWayland explicitly.
+start pcmanfm env GDK_BACKEND=x11 pcmanfm --desktop
+
+# Waybar draws a bar or it does not; give the clients a moment and record who survived.
+sleep 3
+for p in waybar swaybg pcmanfm; do
+  if pgrep -x "$p" > /dev/null 2>&1; then
+    echo "$p: running" >> "$log"
+  else
+    echo "$p: NOT running" >> "$log"
+  fi
+done
+sync
+exit 0

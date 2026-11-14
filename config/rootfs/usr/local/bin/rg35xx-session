@@ -1,7 +1,9 @@
 #!/bin/sh
 # Switch the RG35XX Pro between its mutually exclusive sessions.
 #
-#   rg35xx-session es|desktop|terminal|game|poweroff|reboot
+#   rg35xx-session es|desktop|terminal|game|poweroff|reboot|back
+#
+#   back   return to the mode the current session was entered from (ES-DE quit menu)
 #
 # Runs as root (the gamer user has NOPASSWD sudo). The requested mode is recorded in
 # /run/rg35xx/target first: the ExecStopPost helper of the session that is being torn down reads
@@ -10,25 +12,44 @@ set -eu
 
 mode=${1:-}
 case "$mode" in
-  es | desktop | terminal | game | poweroff | reboot) ;;
+  es | desktop | terminal | game | poweroff | reboot | back) ;;
   *)
-    echo "usage: rg35xx-session es|desktop|terminal|game|poweroff|reboot" >&2
+    echo "usage: rg35xx-session es|desktop|terminal|game|poweroff|reboot|back" >&2
     exit 2
     ;;
 esac
 
 mkdir -p /run/rg35xx
+
+# "back" is not a session of its own: it re-enters whatever was running before this one. ES-DE
+# entered from the desktop quits back into the desktop, ES-DE started at boot quits to the console.
+if [ "$mode" = back ]; then
+  previous=$(cat /run/rg35xx/previous 2>/dev/null || true)
+  case "$previous" in
+    desktop | terminal) mode=$previous ;;
+    *) mode=terminal ;;
+  esac
+else
+  current=$(cat /run/rg35xx/target 2>/dev/null || true)
+  if [ -n "$current" ] && [ "$current" != "$mode" ]; then
+    printf '%s\n' "$current" > /run/rg35xx/previous
+    chmod 0644 /run/rg35xx/previous
+  fi
+fi
+
 printf '%s\n' "$mode" > /run/rg35xx/target
 chmod 0644 /run/rg35xx/target
 
-# --no-block everywhere: this command is normally invoked from *inside* the session that the
-# start job will stop (ES quit script, desktop menu), and a blocking client would be killed by
-# its own cgroup stop before the job it waits for can finish.
+# The switch itself runs as a transient system unit, outside every session cgroup: this command is
+# normally invoked from inside the session that is about to be stopped (ES quit script, desktop
+# menu, waybar), and a client in that cgroup would be killed halfway through its own job. The
+# transient unit also serialises the switch (stop the old mode, then start the new one), which
+# Conflicts= alone does not do.
 case "$mode" in
-  es)       exec systemctl --no-block start rg35xx-es.service ;;
-  desktop)  exec systemctl --no-block start rg35xx-desktop.service ;;
-  terminal) exec systemctl --no-block start rg35xx-terminal.service ;;
-  game)     exec systemctl --no-block start rg35xx-game.service ;;
+  es | desktop | terminal | game)
+    exec /usr/bin/systemd-run --quiet --collect --no-block --unit=rg35xx-switch-$$ \
+      /usr/local/bin/rg35xx-session-apply "$mode"
+    ;;
   poweroff) exec systemctl poweroff ;;
   reboot)   exec systemctl reboot ;;
 esac

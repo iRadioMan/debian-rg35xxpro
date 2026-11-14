@@ -1,0 +1,16 @@
+[Unit]
+Description=RG35XX Pro: unblock the Wi-Fi radio before wpa_supplicant starts
+Documentation=file:///usr/local/share/rg35xxpro/README.md
+# rtw88 comes up soft-blocked when the firmware/regulatory state is not what the driver expects;
+# a blocked radio makes wpa_supplicant fail with "interface wlan0 not ready" and nothing retries.
+After=systemd-udevd.service
+Before=wpa_supplicant@wlan0.service
+ConditionPathExists=/dev/rfkill
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/rfkill unblock all
+
+[Install]
+WantedBy=multi-user.target

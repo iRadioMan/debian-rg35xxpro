@@ -1,0 +1,28 @@
+#!/bin/sh
+# Applies one session switch: stop every other mode, then start the requested one.
+#
+# Runs as a transient system unit (see rg35xx-session), never inside the session it is about to
+# stop. That is the whole point: with only Conflicts= the new session starts in parallel with the
+# old one being stopped, so labwc can reach for the DRM device while ES-DE still holds it and the
+# start fails. Stopping first and waiting removes that race.
+set -eu
+
+mode=${1:-}
+case "$mode" in
+  es | desktop | terminal | game) ;;
+  *)
+    echo "usage: rg35xx-session-apply es|desktop|terminal|game" >&2
+    exit 2
+    ;;
+esac
+
+target=rg35xx-$mode.service
+for unit in rg35xx-es.service rg35xx-desktop.service rg35xx-game.service rg35xx-terminal.service; do
+  [ "$unit" = "$target" ] && continue
+  systemctl stop "$unit" || true
+  # A session that had to be SIGKILLed (ES-DE ignores the quit flag while a dialog is open) is
+  # left in the "failed" state; clearing it keeps a normal switch from looking like a crash.
+  systemctl reset-failed "$unit" 2>/dev/null || true
+done
+
+exec systemctl start "$target"

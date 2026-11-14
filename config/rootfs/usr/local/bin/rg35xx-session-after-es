@@ -10,8 +10,9 @@ set -eu
 [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] && exit 0
 
 target=$(cat /run/rg35xx/target 2>/dev/null || true)
+# Any explicit target means a switch (or a restart of this very unit) was requested: stay quiet.
 case "$target" in
-  game | desktop | terminal | poweroff | reboot) exit 0 ;;
+  es | game | desktop | terminal | poweroff | reboot) exit 0 ;;
 esac
 
 printf 'terminal\n' > /run/rg35xx/target

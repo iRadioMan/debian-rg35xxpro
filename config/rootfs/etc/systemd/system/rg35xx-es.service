@@ -4,20 +4,22 @@ Documentation=file:/root/README.md
 # One VT, one session: every other mode conflicts with this one, so a switch always tears the
 # old stack down instead of running two DRM clients on a 1 GiB machine.
 Conflicts=rg35xx-desktop.service rg35xx-terminal.service rg35xx-game.service getty@tty1.service
-After=systemd-user-sessions.service sound.target network.target
+After=systemd-user-sessions.service sound.target network.target rg35xx-userdata-seed.service
 Wants=sound.target network.target
-OnFailure=rg35xx-terminal.service
+# No OnFailure=: the ExecStopPost helper already decides where a session that ended on its
+# own should go, and a failure *during a switch* would make it start a third session that
+# cancels the switch the user asked for.
 
 [Service]
 Type=simple
 User=gamer
-TTYPath=/dev/tty1
-# The VT must be reset on start and hung up on stop, otherwise a crashed ES leaves the console
-# in graphics mode with SIGHUP-less leftovers on tty1.
-TTYReset=yes
-TTYVHangup=yes
-StandardInput=tty
-StandardOutput=tty
+# Deliberately no TTYPath/TTYReset/StandardInput=tty: these sessions do not read the console, and
+# holding tty1 as their controlling terminal makes them die with SIGHUP when the *previous* mode's
+# getty is torn down (vhangup() on the VT). Output goes to the journal instead.
+# ES-DE output goes to the journal: tty1 is owned by the DRM client, and without this
+# a frontend that dies on startup leaves nothing behind but "failed".
+StandardOutput=journal
+StandardError=journal
 EnvironmentFile=-/etc/rg35xx/session.env
 EnvironmentFile=-/etc/rg35xx/kms.env
 Environment=RG35XX_ES_SESSION=1
@@ -26,7 +28,10 @@ ExecStartPre=+/usr/local/bin/rg35xx-wait-audio
 ExecStart=/usr/bin/es-de --home /home/gamer --no-splash --force-full
 ExecStopPost=+/usr/local/bin/rg35xx-session-after-es
 KillMode=control-group
-TimeoutStopSec=10
+# ES-DE ignores the quit flag while a modal dialog is open, so a stop request issued from outside
+# (systemd, a mode switch) can take a while before the process reacts. 25 s is long enough to let
+# it leave cleanly instead of leaving a half-killed DRM client behind.
+TimeoutStopSec=25
 Restart=no
 
 [Install]

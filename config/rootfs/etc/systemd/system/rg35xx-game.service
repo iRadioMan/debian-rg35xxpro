@@ -3,16 +3,18 @@ Description=RG35XX Pro: game or port without the frontend
 Conflicts=rg35xx-es.service rg35xx-desktop.service rg35xx-terminal.service getty@tty1.service
 After=systemd-user-sessions.service sound.target
 Wants=sound.target
-OnFailure=rg35xx-terminal.service
+# No OnFailure=: the ExecStopPost helper already decides where a session that ended on its
+# own should go, and a failure *during a switch* would make it start a third session that
+# cancels the switch the user asked for.
 
 [Service]
 Type=simple
 User=gamer
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-StandardInput=tty
-StandardOutput=tty
+# Deliberately no TTYPath/TTYReset/StandardInput=tty: these sessions do not read the console, and
+# holding tty1 as their controlling terminal makes them die with SIGHUP when the *previous* mode's
+# getty is torn down (vhangup() on the VT). Output goes to the journal instead.
+StandardOutput=journal
+StandardError=journal
 EnvironmentFile=-/etc/rg35xx/session.env
 EnvironmentFile=-/etc/rg35xx/kms.env
 Environment=RG35XX_IN_GAME=1

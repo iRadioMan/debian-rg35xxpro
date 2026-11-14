@@ -1,0 +1,4 @@
+# PortMaster and other port scripts write their status to the active VT (/dev/tty0) and expect to
+# be allowed to: they run as the unprivileged session user, which cannot open a 0600 root tty.
+# Same mode ROCKNIX uses on this class of device.
+KERNEL=="tty0", MODE="0666"

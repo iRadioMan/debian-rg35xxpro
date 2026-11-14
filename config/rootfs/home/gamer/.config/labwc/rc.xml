@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!-- labwc configuration. Only window rules for now.
+     pcmanfm draws the desktop icons as an X11 override-redirect-ish window of type DESKTOP; under
+     XWayland labwc would otherwise decorate and size it like a normal window, which put a bordered
+     "pcmanfm" box in the corner of the screen instead of icons on the desktop. -->
+<labwc_config>
+  <windowRules>
+    <windowRule type="desktop" serverDecoration="no" skipTaskbar="yes">
+      <action name="Maximize"/>
+    </windowRule>
+  </windowRules>
+</labwc_config>

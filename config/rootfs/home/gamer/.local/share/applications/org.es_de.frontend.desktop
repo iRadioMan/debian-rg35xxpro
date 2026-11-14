@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Games
+GenericName=EmulationStation
+Comment=Switch tty1 to ES-DE; this desktop session is stopped by the switch
+Exec=sudo -n /usr/local/bin/rg35xx-session es
+Icon=org.es_de.frontend
+Terminal=false
+StartupNotify=false
+Categories=Game;Emulator;
+Keywords=games;emulation;es-de;
