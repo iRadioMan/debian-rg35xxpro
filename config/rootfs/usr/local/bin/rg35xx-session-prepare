@@ -12,6 +12,11 @@ case "$mode" in
     ;;
 esac
 
+# tmpfiles normally creates this as root:gamer 0775, but a boot-time ordering mistake must not
+# take the desktop down again: the autostart writes its log here as gamer, and a root:root 0755
+# directory makes every client in that script fail to start. This runs as root (ExecStartPre=+).
+install -d -o root -g gamer -m 0775 /run/rg35xx
+
 # Bluetooth is only used by the desktop (keyboard/mouse) and by nothing in ES, on the console or
 # under a game; bluez keeps a daemon plus its page cache resident for no reason there.
 if [ "$mode" != desktop ]; then

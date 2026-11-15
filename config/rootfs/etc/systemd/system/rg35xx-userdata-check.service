@@ -1,0 +1,24 @@
+[Unit]
+Description=RG35XX Pro: repair the user-data FAT after an unclean shutdown
+Documentation=file:///usr/local/share/rg35xxpro/README.md
+# This belongs to the local-fs transaction: it must run after p3 exists and before the mount.
+# DefaultDependencies=no keeps it away from basic.target, which is ordered after local-fs.target.
+DefaultDependencies=no
+After=local-fs-pre.target rg35xx-userdata.service
+Before=mnt-userdata.mount shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+# The unit is pulled both by local-fs.target and by mnt-userdata.mount. Without RemainAfterExit a
+# second start job runs it again after the partition is mounted; it would then skip (correctly),
+# but there is no reason to start the same oneshot three times per boot.
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rg35xx-userdata-check
+# The script exits 0 even when fsck cannot finish: mnt-userdata.mount is nofail and a failed
+# repair must not turn into a failed boot. Keep a hard stop anyway so a hung fsck cannot hold
+# local-fs.target forever.
+TimeoutStartSec=360
+
+[Install]
+WantedBy=local-fs.target

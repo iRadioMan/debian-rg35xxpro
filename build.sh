@@ -376,7 +376,7 @@ EOF
   printf '%b\n' \
     '/dev/mmcblk0p2\t/\text4\tdefaults,noatime,commit=120,errors=remount-ro\t0 1' \
     '/dev/mmcblk0p1\t/boot/firmware\tvfat\tdefaults,noatime,nofail\t0 2' \
-    '/dev/mmcblk0p3\t/mnt/userdata\tvfat\tnoatime,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,utf8=1,iocharset=utf8,x-systemd.requires=rg35xx-userdata.service,x-systemd.after=rg35xx-userdata.service,x-systemd.device-timeout=10\t0 0' \
+    '/dev/mmcblk0p3\t/mnt/userdata\tvfat\tnoatime,nofail,uid=1000,gid=1000,fmask=0022,dmask=0022,utf8=1,iocharset=utf8,flush,x-systemd.requires=rg35xx-userdata.service,x-systemd.after=rg35xx-userdata.service,x-systemd.device-timeout=10\t0 0' \
     '/mnt/userdata/roms\t/roms\tnone\tbind,x-systemd.requires=rg35xx-userdata-seed.service,x-systemd.after=rg35xx-userdata-seed.service\t0 0' \
     'tmpfs\t/tmp\ttmpfs\tdefaults,noatime,nosuid,nodev,size=256M,mode=1777\t0 0' \
     > "$ROOTFS/etc/fstab"
@@ -435,12 +435,16 @@ EOF
            wpa_supplicant@wlan0.service wifi-provision.service wifi-powersave-off.service \
            boot-report.timer fstrim.timer avahi-daemon.service triggerhappy.service \
            zramswap.service rg35xx-codec-defaults.service rg35xx-es.service \
-           rg35xx-wifi-unblock.service rg35xx-userdata.service rg35xx-userdata-seed.service; do
+           rg35xx-wifi-unblock.service rg35xx-userdata.service rg35xx-userdata-check.service \
+           rg35xx-userdata-seed.service; do
     dst=$ROOTFS/etc/systemd/system/$(dirname "$u").wants
     case "$u" in
       *.timer) dst=$ROOTFS/etc/systemd/system/timers.target.wants ;;
-      # Partition creation belongs inside local-fs.target, before roms.mount exists.
-      rg35xx-userdata.service) dst=$ROOTFS/etc/systemd/system/local-fs.target.wants ;;
+      # Partition creation, repair and seeding all belong to local-fs.target: they run before
+      # mnt-userdata.mount/roms.mount. Keeping them out of multi-user.target also avoids the
+      # ordering cycle that used to drop systemd-tmpfiles-setup.service from the boot.
+      rg35xx-userdata.service|rg35xx-userdata-check.service|rg35xx-userdata-seed.service)
+        dst=$ROOTFS/etc/systemd/system/local-fs.target.wants ;;
       wpa_supplicant@wlan0.service) dst=$ROOTFS/etc/systemd/system/multi-user.target.wants ;;
       *) dst=$ROOTFS/etc/systemd/system/multi-user.target.wants ;;
     esac

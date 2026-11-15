@@ -19,7 +19,7 @@ case "$mode" in
     ;;
 esac
 
-mkdir -p /run/rg35xx
+install -d -o root -g gamer -m 0775 /run/rg35xx
 
 # "back" is not a session of its own: it re-enters whatever was running before this one. ES-DE
 # entered from the desktop quits back into the desktop, ES-DE started at boot quits to the console.

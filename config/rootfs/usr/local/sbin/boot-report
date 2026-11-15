@@ -25,9 +25,10 @@ OUT=/boot/firmware/boot-report.txt
   echo "--- cgroup mounts ---"; mount | grep -E 'cgroup' 2>&1 | head -6
   echo "--- user units ---"; systemctl --user -M gamer@ is-active pipewire wireplumber 2>&1 | head -5
   echo "--- wpa_supplicant cfg ---"; head -20 /etc/wpa_supplicant/wpa_supplicant-wlan0.conf 2>&1
-  echo "--- userdata ---"; findmnt /roms 2>&1; df -h /roms 2>&1
-  echo "--- desktop session log ---"; cat /run/rg35xx/desktop.log 2>&1 | tail -60
-  echo "--- game log ---"; tail -60 /run/rg35xx/game.log 2>&1
+  echo "--- userdata ---"; findmnt /mnt/userdata /roms 2>&1; df -h /roms 2>&1
+  echo "--- userdata fsck ---"; cat /run/rg35xx-userdata-fsck.log 2>&1 | tail -80; journalctl -b -u rg35xx-userdata-check.service --no-pager 2>&1 | tail -40
+  echo "--- desktop session log ---"; { cat /run/rg35xx/desktop.log 2>/dev/null || cat /run/user/1000/rg35xx-desktop.log 2>/dev/null; } | tail -60
+  echo "--- game log ---"; { cat /run/rg35xx/game.log 2>/dev/null || cat /run/user/1000/rg35xx-game.log 2>/dev/null; } | tail -60
   echo "--- portmaster log ---"; tail -60 /roms/ports/PortMaster/log.txt 2>&1
   echo "--- usb ---"; lsusb 2>&1 | head -20
   echo "--- input devices ---"; grep -E '^N:|^H:' /proc/bus/input/devices 2>&1 | head -40

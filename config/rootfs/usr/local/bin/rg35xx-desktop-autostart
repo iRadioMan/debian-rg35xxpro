@@ -7,10 +7,17 @@
 # FAT partition (boot-report.txt), so the failure can be read from any PC.
 set -u
 
-log=/run/rg35xx/desktop.log
-: > "$log"
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000}
 export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+
+# /run/rg35xx is created root:gamer 0775 by tmpfiles and by rg35xx-session-prepare. If either
+# failed, do not silently start no clients at all: fall back to the session's own runtime
+# directory, which is always writable by gamer. boot-report reads both paths.
+log=/run/rg35xx/desktop.log
+if ! ( : >> "$log" ) 2>/dev/null; then
+  log="$XDG_RUNTIME_DIR/rg35xx-desktop.log"
+fi
+: > "$log"
 
 {
   echo "=== autostart $(date -u '+%Y-%m-%dT%H:%M:%SZ') ==="

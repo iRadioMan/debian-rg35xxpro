@@ -4,9 +4,17 @@ Documentation=file:///usr/local/share/rg35xxpro/README.md
 # The partition itself: /mnt/userdata/roms is the bind source of /roms, and this unit creates it.
 # When the partition is missing (first boot, card too small) the unit is skipped and roms.mount
 # with it, so /roms stays the plain directory tmpfiles made instead of a bind onto the rootfs.
+#
+# DefaultDependencies=no is required. With the default dependencies this unit is ordered after
+# basic.target, which is after local-fs.target, while roms.mount (created from fstab) is before
+# local-fs.target. That cycle made systemd delete systemd-tmpfiles-setup.service from the boot
+# transaction, leaving /run/rg35xx root:root 0755; the desktop autostart then could not create
+# desktop.log and started none of its clients. This unit belongs to local-fs, not to multi-user.
+DefaultDependencies=no
 Requires=mnt-userdata.mount
-After=mnt-userdata.mount
-Before=roms.mount
+After=local-fs-pre.target mnt-userdata.mount
+Before=roms.mount shutdown.target
+Conflicts=shutdown.target
 ConditionPathIsMountPoint=/mnt/userdata
 
 [Service]
@@ -15,4 +23,4 @@ RemainAfterExit=yes
 ExecStart=/usr/local/sbin/rg35xx-userdata-seed
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=local-fs.target

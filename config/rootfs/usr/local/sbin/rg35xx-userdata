@@ -29,8 +29,15 @@ if [ ! -b "$DEV" ]; then
   exit 0
 fi
 
-if blkid -p "$partdev" >/dev/null 2>&1; then
-  log "$partdev already carries a filesystem; leaving it alone"
+# The partition table, not a filesystem probe, decides whether p3 exists. blkid fails on a FAT
+# whose boot sector was damaged by a power loss; treating that as "no partition" appended a new
+# partition on every boot instead of leaving the damaged one to fsck.
+if ! table=$(sfdisk -d "$DEV" 2>/dev/null); then
+  log "cannot read the partition table of $DEV; refusing to repartition it"
+  exit 1
+fi
+if printf '%s\n' "$table" | grep -q "^$partdev[[:space:]]*:"; then
+  log "$partdev exists in the partition table; leaving it alone"
   exit 0
 fi
 

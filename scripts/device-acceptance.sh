@@ -53,8 +53,14 @@ if grep -q '^gamer ' /etc/sudoers.d/10-rg35xx 2>/dev/null; then
 else
   bad "/etc/sudoers.d/10-rg35xx missing or does not grant gamer sudo"
 fi
-[ -d /run/rg35xx ] && ok "/run/rg35xx present (mode=$(cat /run/rg35xx/target 2>/dev/null || echo unset))" ||
-  note "/run/rg35xx not created (tmpfiles rule not applied yet?)"
+if [ -d /run/rg35xx ]; then
+  perms=$(stat -c '%U:%G %a' /run/rg35xx 2>/dev/null || true)
+  [ "$perms" = "root:gamer 775" ] &&
+    ok "/run/rg35xx is gamer-writable ($perms)" ||
+    bad "/run/rg35xx has $perms, expected root:gamer 775 (desktop clients cannot log/start)"
+else
+  bad "/run/rg35xx is missing (tmpfiles was skipped?)"
+fi
 
 sec "frontend (ES-DE, cores, ports)"
 if command -v es-de >/dev/null 2>&1; then
@@ -139,6 +145,13 @@ case "$source" in
 esac
 findmnt -n -o OPTIONS /mnt/userdata 2>/dev/null | grep -q 'uid=1000' &&
   ok "user-data belongs to gamer" || bad "/mnt/userdata mount options lack uid=1000"
+findmnt -n -o OPTIONS /mnt/userdata 2>/dev/null | grep -q 'flush' &&
+  ok "user-data mounts with flush (smaller loss window)" || warn "/mnt/userdata does not use flush"
+command -v fsck.fat >/dev/null 2>&1 &&
+  ok "fsck.fat available for the dirty-bit repair" || bad "fsck.fat missing"
+[ "$(systemctl is-enabled rg35xx-userdata-check.service 2>/dev/null)" = "enabled" ] &&
+  ok "rg35xx-userdata-check.service runs before mnt-userdata.mount" ||
+  bad "rg35xx-userdata-check.service is not enabled"
 [ -w /roms ] && ok "/roms is writable" || bad "/roms is not writable"
 last3=$(sfdisk -d /dev/mmcblk0 2>/dev/null | sed -n 's|^/dev/mmcblk0p3 *:.*start= *\([0-9]*\), *size= *\([0-9]*\).*|\1 \2|p')
 if [ -n "$last3" ]; then

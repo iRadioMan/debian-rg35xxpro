@@ -1,0 +1,76 @@
+#!/bin/sh
+# Repair the FAT32 user-data partition before it is mounted, but only when it was not unmounted
+# cleanly.
+#
+# Linux vfat sets bit 0 of the boot sector's state byte (offset 0x41) on every read-write mount and
+# clears it on a clean unmount. A power loss leaves it set. The kernel still mounts such a volume
+# read-write and only prints "Volume was not properly unmounted. Some data may be corrupt. Please
+# run fsck." — so without this check the first boot after a crash would write into a possibly
+# inconsistent FAT, and a structural error would leave /roms unmounted until the card was taken to
+# a PC. fsck.fat -a clears the flag and repairs chains and lost clusters.
+#
+# Runs before mnt-userdata.mount (the unit orders it) and after rg35xx-userdata.service created p3
+# on first boot. A partition that is absent or already mounted is left alone.
+set -eu
+
+DEV=${RG35XX_USERDATA_DEV:-/dev/mmcblk0}
+PART=3
+PARTDEV=${RG35XX_USERDATA_PARTDEV:-}
+
+log() { printf 'rg35xx-userdata-check: %s\n' "$*" >&2; }
+
+if [ -z "$PARTDEV" ]; then
+  case "$DEV" in
+    *[0-9]) PARTDEV="${DEV}p${PART}" ;;
+    *) PARTDEV="${DEV}${PART}" ;;
+  esac
+fi
+
+if [ ! -b "$PARTDEV" ]; then
+  log "$PARTDEV is not a block device; nothing to check"
+  exit 0
+fi
+
+# The mount unit is ordered after this one, but a manual mount or a leftover unit must never make
+# fsck write to a mounted filesystem.
+if findmnt -n -S "$PARTDEV" >/dev/null 2>&1; then
+  log "$PARTDEV is already mounted; skipping fsck"
+  exit 0
+fi
+
+# FAT_STATE_DIRTY: bit 0 of the byte at offset 0x41. fsck.fat checks the same flag (and the FAT[1]
+# clean-shutdown bit) when it runs; reading it here avoids a full FAT scan on every clean boot.
+state=$(od -An -tu1 -j 65 -N 1 "$PARTDEV" 2>/dev/null | tr -d ' \n')
+if [ "${state:-0}" != "1" ]; then
+  exit 0
+fi
+
+if ! command -v fsck.fat >/dev/null 2>&1; then
+  log "fsck.fat is not installed; cannot repair $PARTDEV"
+  exit 0
+fi
+
+log "dirty bit is set on $PARTDEV; running fsck.fat -a"
+out=/run/rg35xx-userdata-fsck.log
+set +e
+# -a: repair without questions. A lost cluster chain is salvaged as FSCK*.REC instead of being
+# thrown away. Bound the run: a card that takes longer than five minutes is left for the next
+# boot, and the mount is still attempted by systemd (mnt-userdata.mount is nofail).
+timeout 300 fsck.fat -a "$PARTDEV" >"$out" 2>&1
+rc=$?
+set -e
+
+cat "$out" >&2
+if [ -w /dev/tty0 ]; then
+  cat "$out" >/dev/tty0 2>/dev/null || true
+fi
+
+case "$rc" in
+  0) log "fsck.fat found no errors" ;;
+  1) log "fsck.fat corrected errors" ;;
+  124) log "fsck.fat timed out after 300 s; systemd will still attempt the mount" ;;
+  *) log "fsck.fat failed with status $rc; leaving the mount attempt to systemd" ;;
+esac
+
+sync
+exit 0

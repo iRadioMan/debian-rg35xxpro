@@ -215,6 +215,31 @@ journalctl -u wpa_supplicant@wlan0 -u wifi-provision -b
   seed → `roms.mount` скипается, и `/roms` остаётся обычным каталогом на rootfs: загрузка не
   ломается.
 
+### Сбой питания и `fsck`
+
+Linux vfat ставит dirty-бит в байте `0x41` boot-сектора при каждом RW-монтировании и сбрасывает
+его только при чистом unmount. После выключения/сброса во время записи бит остаётся; ядро всё
+равно монтирует раздел RW и лишь печатает warning, поэтому без проверки следующий запуск писал бы
+в потенциально несогласованный FAT, а структурная ошибка оставляла бы `/roms` несмонтированным
+до визита с картой на ПК.
+
+`rg35xx-userdata-check.service` стоит в `local-fs.target` **перед** `mnt-userdata.mount`:
+
+- читает байт `0x41`; если dirty-бит не выставлен — выходит сразу, полного сканирования на
+  каждом чистом буте нет;
+- если выставлен — запускает `fsck.fat -a` (потерянные цепочки сохраняются как `FSCK*.REC`),
+  ограничивает работу 300 секундами и пишет вывод в журнал и `/dev/tty0`;
+- после проверки systemd всё равно пытается смонтировать раздел (`nofail`), а результат остаётся
+  в `journalctl -b -u rg35xx-userdata-check` и в `boot-report.txt`.
+
+Дополнительно p3 монтируется с `flush`: данные сбрасываются при закрытии файла, окно потери при
+обрыве меньше (как в Batocera/Knulli). Это не заменяет `fsck`, но уменьшает вероятность
+повреждения.
+
+Наличие p3 `rg35xx-userdata` определяет по таблице разделов (`sfdisk -d`), а не по `blkid`:
+повреждённый boot-сектор иначе выглядел бы как «раздела нет», и скрипт добавлял бы новый раздел
+при каждом буте вместо того, чтобы отдать p3 на восстановление.
+
 На первом запуске раздел создаётся, но монтируется уже в следующей загрузке — так устроена
 транзакция `local-fs.target`. После первого включения достаточно выключить и включить устройство,
 и `roms/` появится.
@@ -228,7 +253,9 @@ p3 в exFAT можно, но тогда нужно поправить `vfat` н�
 sfdisk -d /dev/mmcblk0 | grep mmcblk0p          # три раздела, p3 до конца карты
 findmnt /mnt/userdata /roms                     # vfat и bind /dev/mmcblk0p3[/roms]
 ls /mnt/userdata                                # roms (плюс System Volume Information от Windows)
-journalctl -b -u rg35xx-userdata -u rg35xx-userdata-seed -u roms.mount
+journalctl -b -u rg35xx-userdata -u rg35xx-userdata-check -u rg35xx-userdata-seed -u roms.mount
+cat /run/rg35xx-userdata-fsck.log 2>/dev/null   # вывод последнего fsck.fat -a
+od -An -tx1 -j65 -N1 /dev/mmcblk0p3            # dirty-бит; 01 — раздел был смонтирован/сбой
 ```
 
 Скопировать игры/видео с ПК: выключить устройство, вставить карту, открыть в Windows раздел `DATA`,
@@ -424,6 +451,12 @@ sha256 (источник не `KBUILD_BUILD_TIMESTAMP`, он закреплён)
   образа и не-блочное устройство обрабатываются без ошибок. `findmnt --verify` по новой строке
   fstab — 0 ошибок разбора; `systemd-fstab-generator` даёт `roms.mount` с
   `Requires=`/`After=rg35xx-userdata.service`, юнит попадает в `local-fs.target.wants`.
+- Сбой питания p3 проверен на живом устройстве жёстким сбросом (`echo b > /proc/sysrq-trigger`):
+  при следующей загрузке `rg35xx-userdata-check` увидел dirty-бит, прогнал `fsck.fat -a` (727
+  файлов, 2358 кластеров, ошибок нет), снял бит и только после этого смонтировал p3; `fsck.fat`
+  на 53.7 ГиБ занял ~3 с. Повторный запуск на смонтированном разделе корректно пропускается.
+- Desktop после того же сброса: `/run/rg35xx` создан `root:gamer 0775`, `waybar`, `swaybg`,
+  `pcmanfm` и `labwc` запущены, `desktop.log` пишется; acceptance — 0 FAIL.
 - Smoke-boot образа под `qemu-system-aarch64 -M virt` (диск через usb-storage): ядро 7.1.2 поднимается,
   `EXT4-fs (sda2) mounted`, systemd доходит до `multi-user.target`, `ssh.service` и `getty@tty1` — `active`.
 - Собранный DTB: `mmc0 = mmc@4020000` (SD), панель `anbernic,rg35xx-plus-panel` + `panel-mipi-dpi-spi`,
@@ -573,8 +606,9 @@ power save off, кнопки громкости, калибровка микше
 
 |Файл|Что содержит|
 |---|---|
-|`/run/rg35xx/desktop.log`|как поднялись waybar/swaybg/pcmanfm, их stderr и кто из них выжил через 3 с|
+|`/run/rg35xx/desktop.log`|как поднялись waybar/swaybg/pcmanfm, их stderr и кто из них выжил через 3 с (при проблемах с `/run/rg35xx` — `$XDG_RUNTIME_DIR/rg35xx-desktop.log`)|
 |`/run/rg35xx/game.log`|argv запущенного порта/игры, stdout и stderr (иначе tty1 их съедает)|
+|`/run/rg35xx-userdata-fsck.log`|вывод последнего `fsck.fat -a` после нештатного выключения|
 |`/roms/ports/PortMaster/log.txt`|собственный лог PortMaster: вывод `pugwash`, трейсбеки Python|
 
 Обновляется через 60 с после загрузки, далее каждые 5 минут и при выключении. Достаточно вынуть
@@ -641,7 +675,7 @@ power save off, кнопки громкости, калибровка микше
 |`user@1000` не стартует → нет PipeWire|в журнале `systemd[402]: Failed to allocate manager object: Permission denied` сразу после `pam_unix(systemd-user:session)`. Пользовательский менеджер поднимается по linger до того, как появился `XDG_RUNTIME_DIR`|tmpfiles создаёт `/run/user/1000 0700 gamer gamer`; `boot-report.txt` теперь печатает статус `user@1000`, права `/run/user`, монтирования cgroup и состояние `pipewire`/`wireplumber` в пользовательской сессии|
 |Wi-Fi не поднимается при верном `wifi.conf`|`wpa_supplicant@wlan0` стартовал раньше, чем rtw88 создавал `wlan0` (firmware грузится позже multi-user), падал с «Failed to initialize interface» и никто его не перезапускал; вдобавок радио могло быть soft-blocked|исправлено: drop-in `wpa_supplicant@wlan0.service.d/10-rg35xx.conf` с `After=sys-subsystem-net-devices-wlan0.device`, `Restart=on-failure` и юнит `rg35xx-wifi-unblock` (`rfkill unblock all`). Диагностика — `rfkill list` и журнал в `boot-report.txt`|
 |PortMaster закрывается сразу|вывод `pugwash` уходил в tty1 и терялся|логи теперь в `/roms/ports/PortMaster/log.txt` (FAT, читается с ПК) и `/run/rg35xx/game.log`, оба дублируются в `boot-report.txt`; `/dev/tty0` открыт на запись (udev-правило), PortMaster больше не спотыкается о свой `printf` в консоль|
-|Desktop: только курсор и меню labwc|клиенты autostart'а стартовали без логов и могли получить `SIGTTIN` (stdin — tty1), а также раньше готового Wayland-сокета|`rg35xx-desktop-autostart` ждёт сокет, запускает клиентов с `</dev/null`, пишет `desktop.log` и состояние через 3 с|
+|Desktop: только курсор и меню labwc|две причины. Первая: клиенты autostart'а стартовали без логов и могли получить `SIGTTIN` (stdin — tty1), а также раньше готового Wayland-сокета. Вторая: `rg35xx-userdata-seed.service` с зависимостями по умолчанию попадал после `basic.target`, а `roms.mount` — до `local-fs.target`; systemd рвал цикл, выбрасывая `systemd-tmpfiles-setup.service`, поэтому `/run/rg35xx` оставался `root:root 0755`, autostart не мог создать `desktop.log` и не запускал ни waybar, ни pcmanfm|`rg35xx-desktop-autostart` ждёт сокет, запускает клиентов с `</dev/null`, пишет `desktop.log` и состояние через 3 с. Seed-юнит переведён на `DefaultDependencies=no` и `local-fs.target`; `rg35xx-session-prepare` дополнительно делает `install -d -o root -g gamer -m 0775 /run/rg35xx`, а autostart при неудаче пишет лог в `$XDG_RUNTIME_DIR`|
 |Громкость: потолок средний|`DAC` уже на 0 дБ; остальное — `Line Out`, которым управляет WirePlumber из громкости sink (100 % = 31 = 0 дБ)|если мало — sink на 100 %; больше запаса нет, только внешний усилитель наушников|
 
 ## Звук: что проверено на железе
