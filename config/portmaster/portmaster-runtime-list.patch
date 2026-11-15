@@ -1,0 +1,202 @@
+diff -r a/pugwash b/pugwash
+--- a/pugwash	2026-11-15 12:35:10.124710000 +0700
++++ b/pugwash	2026-11-15 13:05:36.834859000 +0700
+@@ -11,6 +11,10 @@
+     }
+ 
+ PORTMASTER_UPDATE_FREQUENCY = (60 * 60 * 1)
++# The stable update channel still advertises the 2024.03.10 GUI. version_parse() treats that date
++# as newer than 8.6.1, so accepting the prompt replaces this working build with an old one.
++# Port and source updates remain enabled; only the GUI self-update is pinned.
++PORTMASTER_NO_SELF_UPDATE = True
+ __builtins__.PORTMASTER_DEBUG = False  ## This adds a lot of extra info
+ 
+ import contextlib
+@@ -866,10 +870,22 @@
+         self.set_data("port_info.ready_to_run", port_info['attr']['rtr'] and _("Ready to Run") or _("Requires Files"))
+         # self.set_data("port_info.image", port_image)
+ 
+-        runtime = port_info['attr']['runtime']
+-        if runtime is not None and runtime != "None":
+-            self.set_data("port_info.runtime", harbourmaster.runtime_nicename(runtime))
+-            if (self.hm.libs_dir / runtime).is_file():
++        runtimes = port_info['attr']['runtime']
++        if isinstance(runtimes, str):
++            runtimes = [] if runtimes in ("", "None") else [runtimes]
++        elif runtimes is None:
++            runtimes = []
++        else:
++            runtimes = [runtime for runtime in runtimes if runtime]
++
++        if runtimes:
++            self.set_data("port_info.runtime", harbourmaster.runtime_nicename(runtimes))
++            installed_runtimes = 0
++            for runtime in runtimes:
++                if (self.hm.libs_dir / runtime).is_file():
++                    installed_runtimes += 1
++
++            if len(runtimes) == installed_runtimes:
+                 self.set_data("port_info.runtime_status", _("Installed"))
+             else:
+                 self.set_data("port_info.runtime_status", _("Missing"))
+@@ -1851,7 +1867,8 @@
+         pm = PortMasterGUI()
+         pm.hm = None
+ 
+-        if not harbourmaster.HM_TESTING and not config['no-check']:
++        if (not harbourmaster.HM_TESTING and not config['no-check']
++                and not PORTMASTER_NO_SELF_UPDATE):
+             if portmaster_check_update(pm, config, temp_dir):
+                 pm.quit()
+                 return 0
+diff -r a/pylibs/harbourmaster/harbour.py b/pylibs/harbourmaster/harbour.py
+--- a/pylibs/harbourmaster/harbour.py	2026-11-15 12:35:10.131848900 +0700
++++ b/pylibs/harbourmaster/harbour.py	2026-11-15 12:35:10.132606300 +0700
+@@ -811,9 +811,14 @@
+             }
+ 
+         attrs = []
+-        runtime = port_info.get('attr', {}).get('runtime', None)
+-        if runtime is not None:
+-            for runtime_key, runtime_attr in runtime_fix.items():
++        runtimes = port_info.get('attr', {}).get('runtime', [])
++        if isinstance(runtimes, str):
++            runtimes = [runtimes]
++        elif runtimes is None:
++            runtimes = []
++
++        for runtime_key, runtime_attr in runtime_fix.items():
++            for runtime in runtimes:
+                 if runtime_key in runtime:
+                     add_list_unique(attrs, runtime_attr)
+ 
+@@ -1346,11 +1351,20 @@
+         self._fix_permissions()
+ 
+         # logger.debug(port_info)
+-        if port_info['attr'].get('runtime', None) is not None:
+-            runtime_name = runtime_nicename(port_info['attr']['runtime'])
++        runtime = port_info['attr'].get('runtime', None)
++        if isinstance(runtime, str):
++            runtime = [] if runtime in ("", "None") else [runtime]
++        elif runtime is None:
++            runtime = []
+ 
+-            self.callback.progress(None, None, None)
+-            result = self.check_runtime(port_info['attr']['runtime'], in_install=True)
++        if runtime:
++            runtime_name = runtime_nicename(runtime)
++
++            result = 0
++            for runtime_item in runtime:
++                self.callback.progress(None, None, None)
++                result += self.check_runtime(runtime_item, in_install=True)
++
+             if result == 0:
+                 self.callback.message_box(_("Port {download_name!r} and {runtime_name!r} installed successfully.").format(
+                     download_name=port_nice_name,
+@@ -1757,7 +1771,10 @@
+         output.append(f'<r>locat</r>="<y>{nice_value(port_info["name"])}</y>"')
+         if port_info["attr"]['rtr']:
+             output.append(f'<r>runtype</r>="<e>rtr</e>"')
+-        if port_info["attr"]['runtime'] == "mono-6.12.0.122-aarch64.squashfs":
++        runtime = port_info["attr"].get('runtime') or []
++        if isinstance(runtime, str):
++            runtime = [runtime]
++        if "mono-6.12.0.122-aarch64.squashfs" in runtime:
+             output.append(f'<r>mono</r>="<e>y</e>"')
+ 
+         output.append(f'<r>genres</r>="<m>{",".join(port_info["attr"]["genres"])}</m>"')
+diff -r a/pylibs/harbourmaster/source.py b/pylibs/harbourmaster/source.py
+--- a/pylibs/harbourmaster/source.py	2026-11-15 12:35:10.127585600 +0700
++++ b/pylibs/harbourmaster/source.py	2026-11-15 12:35:10.129619300 +0700
+@@ -256,9 +256,13 @@
+         if check_runtime and port_name in getattr(self, '_info', {}):
+             port_info = self._info[port_name]
+ 
+-            if port_info['attr'].get('runtime', None) is not None:
+-                runtime = port_info['attr']['runtime']
++            runtimes = port_info['attr'].get('runtime', None)
++            if isinstance(runtimes, str):
++                runtimes = [] if runtimes in ("", "None") else [runtimes]
++            elif runtimes is None:
++                runtimes = []
+ 
++            for runtime in runtimes:
+                 runtime_file = (self.hm.libs_dir / runtime)
+                 if not runtime_file.exists():
+                     size += self.hm.port_download_size(runtime)
+@@ -917,9 +921,13 @@
+         if check_runtime and port_name in getattr(self, '_info', {}):
+             port_info = self._info[port_name]
+ 
+-            if port_info['attr'].get('runtime', None) is not None:
+-                runtime = port_info['attr']['runtime']
++            runtimes = port_info['attr'].get('runtime', None)
++            if isinstance(runtimes, str):
++                runtimes = [] if runtimes in ("", "None") else [runtimes]
++            elif runtimes is None:
++                runtimes = []
+ 
++            for runtime in runtimes:
+                 runtime_file = (self.hm.libs_dir / runtime)
+                 if not runtime_file.exists():
+                     size += self.hm.port_download_size(runtime)
+diff -r a/pylibs/harbourmaster/util.py b/pylibs/harbourmaster/util.py
+--- a/pylibs/harbourmaster/util.py	2026-11-15 12:35:10.126582000 +0700
++++ b/pylibs/harbourmaster/util.py	2026-11-15 12:35:10.126582000 +0700
+@@ -281,15 +281,26 @@
+ 
+ 
+ def runtime_nicename(runtime):
+-    if runtime.startswith("frt"):
+-        return ("Godot/FRT {version}").format(version=runtime.split('_', 1)[1].rsplit('.', 1)[0])
++    if isinstance(runtime, (list, tuple)):
++        return oc_join([runtime_nicename(item) for item in runtime])
+ 
+-    if runtime.startswith("mono"):
+-        return ("Mono {version}").format(version=runtime.split('-', 1)[1].rsplit('-', 1)[0])
++    if not isinstance(runtime, str):
++        return runtime
+ 
+-    if "jdk" in runtime and runtime.startswith("zulu11"):
+-        return ("JDK {version}").format(version=runtime.split('-')[2][3:])
++    try:
++        if runtime.startswith("frt"):
++            return ("Godot/FRT {version}").format(version=runtime.split('_', 1)[1].rsplit('.', 1)[0])
+ 
++        if runtime.startswith("mono"):
++            return ("Mono {version}").format(version=runtime.split('-', 1)[1].rsplit('-', 1)[0])
++
++        if "jdk" in runtime and runtime.startswith("zulu11"):
++            return ("JDK {version}").format(version=runtime.split('-')[2][3:])
++
++    except IndexError:
++        ## Hand-written runtime names need not follow the "<kind>-<version>" pattern.
++        return runtime
++
+     return runtime
+ 
+ 
+diff -r a/pylibs/pugscene.py b/pylibs/pugscene.py
+--- a/pylibs/pugscene.py	2026-11-15 12:35:10.134559400 +0700
++++ b/pylibs/pugscene.py	2026-11-15 12:35:10.135341700 +0700
+@@ -771,9 +771,16 @@
+         self.runtimes['all']['installed'] = all_installed
+ 
+         for port_name, port_info in self.gui.hm.list_ports(filters=['installed']).items():
+-            if port_info['attr']['runtime'] in self.runtimes:
+-                self.runtimes[port_info['attr']['runtime']]['ports'].append(port_info['attr']['title'])
++            runtimes = port_info['attr']['runtime']
++            if isinstance(runtimes, str):
++                runtimes = [runtimes]
++            elif runtimes is None:
++                runtimes = []
+ 
++            for runtime in runtimes:
++                if runtime in self.runtimes:
++                    self.runtimes[runtime]['ports'].append(port_info['attr']['title'])
++
+         self.last_select = self.tags['runtime_list'].selected_option()
+         self.last_verified = None
+         self.update_selection()

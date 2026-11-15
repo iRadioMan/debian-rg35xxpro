@@ -739,6 +739,36 @@ PY
     unzip -q -o "$BUILD_DIR/PortMaster-$PM_VER.zip" -d "$seed/ports"
     printf '%s\n' "$PM_VER" > "$ROOTFS/etc/rg35xx-portmaster.version"
   fi
+  # The release keeps pylibs/ in pylibs.zip. pugwash would extract it on first run and delete the
+  # patched tree, so extract it here and drop the archive; the runtime-list patch then applies to
+  # the files the device will actually import.
+  if [ -f "$seed/ports/PortMaster/pylibs.zip" ]; then
+    rm -rf "$seed/ports/PortMaster/pylibs" "$seed/ports/PortMaster/exlibs"
+    unzip -q "$seed/ports/PortMaster/pylibs.zip" -d "$seed/ports/PortMaster"
+    rm -f "$seed/ports/PortMaster/pylibs.zip"
+  fi
+  # Upstream's control.txt matches platform-singleadc-joypad (RG552), while this kernel exposes
+  # platform-rocknix-singleadc-joypad. Without a branch the device lookup leaves
+  # /tmp/gamecontrollerdb.txt empty and SDL falls back to its built-in a:b0,b:b1 (A/B swapped).
+  if ! grep -q 'platform-rocknix-singleadc-joypad-event-joystick' "$seed/ports/PortMaster/control.txt"; then
+    sed -i '/elif \[\[ -e "\/dev\/input\/by-path\/platform-singleadc-joypad-event-joystick" \]\]/i\
+elif [[ -e "/dev/input/by-path/platform-rocknix-singleadc-joypad-event-joystick" ]]; then\
+      DEVICE="1900f6a24b480000df14000000010000"\
+      param_device="rg35xxpro"\
+      LOWRES="N"\
+' "$seed/ports/PortMaster/control.txt"
+  fi
+  # PortMaster 8.6.1 assumes attr.runtime is a string, but the current port index stores a list
+  # (empty when no runtime, one or more entries otherwise). Opening a port then crashes with
+  # "AttributeError: 'list' object has no attribute 'startswith'". The patch makes the details,
+  # download-size, install, filter and runtime-manager paths list-aware. It also pins the GUI:
+  # the stable update channel advertises the 2024.03.10 build, which version_parse() sees as
+  # newer than 8.6.1 and installs over this working copy (and over these fixes).
+  if ! grep -q 'Hand-written runtime names need not follow' \
+       "$seed/ports/PortMaster/pylibs/harbourmaster/util.py"; then
+    patch -p1 -d "$seed/ports/PortMaster" --no-backup-if-mismatch \
+      < "$CFG/portmaster/portmaster-runtime-list.patch"
+  fi
   # The release ships its own controller DB without the H700 line, so PortMaster's
   # SDL_GAMECONTROLLERCONFIG lookup would come up empty. Keep the overlay's copy on top.
   install -m 0644 "$CFG/rootfs/usr/share/rg35xx/roms-seed/ports/PortMaster/gamecontrollerdb.txt" \

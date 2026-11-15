@@ -119,6 +119,16 @@ fi
 [ -x /roms/ports/PortMaster.sh ] && ok "PortMaster entry /roms/ports/PortMaster.sh" || bad "PortMaster.sh missing"
 grep -q 'H700 Gamepad' /roms/ports/PortMaster/gamecontrollerdb.txt 2>/dev/null &&
   ok "PortMaster controller DB has the H700 line" || bad "PortMaster controller DB lacks H700"
+grep -q 'platform-rocknix-singleadc-joypad-event-joystick' /roms/ports/PortMaster/control.txt 2>/dev/null &&
+  ok "PortMaster control.txt knows the H700 by-path" ||
+  bad "PortMaster control.txt lacks the H700 branch (A/B mapping will be empty)"
+grep -q 'Hand-written runtime names need not follow' \
+     /roms/ports/PortMaster/pylibs/harbourmaster/util.py 2>/dev/null &&
+  ok "PortMaster handles list-valued runtime metadata" ||
+  bad "PortMaster runtime-list patch missing (opening a port will crash)"
+grep -q 'PORTMASTER_NO_SELF_UPDATE' /roms/ports/PortMaster/pugwash 2>/dev/null &&
+  ok "PortMaster GUI self-update disabled (stable channel advertises the old 2024 build)" ||
+  bad "PortMaster GUI self-update is enabled; it will replace 8.6.1 with the 2024 build"
 dpkg --print-foreign-architectures 2>/dev/null | grep -qx armhf &&
   ok "armhf foreign architecture enabled" || bad "armhf not enabled (32-bit ports will not run)"
 [ -e /lib/ld-linux-armhf.so.3 ] && ok "armhf loader present" || bad "armhf loader missing"
@@ -168,6 +178,12 @@ for f in /etc/rg35xx/session.env /etc/rg35xx/kms.env; do
 done
 grep -q 'SDL_GAMECONTROLLERCONFIG' /etc/rg35xx/session.env 2>/dev/null &&
   ok "SDL controller mapping exported" || bad "SDL_GAMECONTROLLERCONFIG missing"
+# PortMaster re-execs pugwash through sudo; without env_keep SDL falls back to a:b0,b:b1.
+if SDL_GAMECONTROLLERCONFIG=probe sudo -n env 2>/dev/null | grep -qx 'SDL_GAMECONTROLLERCONFIG=probe'; then
+  ok "sudo preserves SDL_GAMECONTROLLERCONFIG (PortMaster A/B mapping)"
+else
+  bad "sudo drops SDL_GAMECONTROLLERCONFIG: PortMaster will swap A/B"
+fi
 [ -r "/home/gamer/.config/retroarch/autoconfig/udev/H700 Gamepad.cfg" ] &&
   ok "RetroArch H700 autoconfig" || bad "RetroArch H700 autoconfig missing"
 for b in rg35xx-session rg35xx-game-exec rg35xx-run-sh retroarch; do
@@ -333,6 +349,9 @@ if command -v aplay >/dev/null 2>&1; then aplay -l 2>/dev/null | head -8; else n
 grep -q 'sun4i-codec' /proc/asound/cards 2>/dev/null && ok "sun4i-codec card present" || bad "no sun4i-codec card"
 grep -q 'Headphone Jack' /proc/bus/input/devices 2>/dev/null && ok "headphone jack detect device present" || note "no jack-detect input device"
 if command -v amixer >/dev/null 2>&1; then amixer -c 0 scontrols 2>/dev/null | head -10; fi
+grep -q 'default.clock.min-quantum = 1024' /etc/pipewire/pipewire.conf.d/50-rg35xx-quantum.conf 2>/dev/null &&
+  ok "PipeWire minimum quantum is 1024 frames (no FAudio/SDL underruns)" ||
+  bad "PipeWire minimum quantum config missing"
 
 sec "memory"
 free -m

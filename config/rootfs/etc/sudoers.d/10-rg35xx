@@ -3,4 +3,9 @@
 # only break ports. The device already boots to root/root with SSH root login enabled (see
 # 10-root.conf); this does not widen the security boundary on a single-user handheld.
 Defaults:gamer !requiretty
+# PortMaster starts pugwash through sudo. sudo resets the environment, and PortMaster's own
+# control.txt preserves only SDL_GAMECONTROLLERCONFIG_FILE (which it fills from a device lookup
+# that does not know the H700 by-path). Without this, SDL drops the mapping from session.env and
+# falls back to its built-in Xbox layout (a:b0, b:b1), so the physical east A acts as B.
+Defaults env_keep += "SDL_GAMECONTROLLERCONFIG"
 gamer ALL=(ALL) NOPASSWD: ALL

@@ -345,6 +345,27 @@ vendor `0x484B`, product `0x14DF`, bus `HOST`; SDL GUID —
 
 PortMaster лежит в `/roms/ports/PortMaster` (запуск — `PortMaster.sh` в `/roms/ports`), читает
 `gamecontrollerdb.txt` оттуда же и получает окружение из `/etc/rg35xx/{session,kms}.env`.
+`pugwash` PortMaster запускает через `sudo`, а `sudo` очищает окружение и сохраняет только
+`SDL_GAMECONTROLLERCONFIG_FILE` (его `control.txt` заполняет по своей таблице устройств; в
+upstream-ветке для `platform-rocknix-singleadc-joypad` нет). Сборка дополняет `control.txt`
+веткой с GUID `1900f6a24b480000df14000000010000`, поэтому `/tmp/gamecontrollerdb.txt` получает
+нашу строку. Дополнительно в `/etc/sudoers.d/10-rg35xx` добавлен
+`Defaults env_keep += "SDL_GAMECONTROLLERCONFIG"`: без него SDL теряет строку из `session.env`
+при заходе в `sudo` и берёт встроенный Xbox-маппинг `a:b0, b:b1`, из-за чего A и B меняются
+местами. `env_keep` страхует и обновления PortMaster, которые могут заменить `control.txt`.
+
+Текущий индекс портов отдаёт `attr.runtime` списком (пустым или из нескольких рантаймов), а
+PortMaster 8.6.1 местами ждёт строку: выбор любого порта падал с
+`AttributeError: 'list' object has no attribute 'startswith'`. Сборка применяет
+`config/portmaster/portmaster-runtime-list.patch`: карточка порта, размер загрузки, установка,
+фильтры и менеджер рантаймов перебирают список и проверяют каждый рантайм. Без патча падают
+и «Ready to run ports», и «All ports».
+
+В том же патче `PORTMASTER_NO_SELF_UPDATE = True`: stable-канал PortMaster до сих пор
+предлагает GUI `2024.03.10-0841`, а `version_parse()` считает дату `2024...` новее `8.6.1` и
+заменяет рабочую сборку старой, несовместимой. Обновление каталога портов и исходников при этом
+работает; заблокировано только самообновление GUI. Acceptance-проверка следит за обоими
+маркерами.
 Добавлен `armhf` (`dpkg --add-architecture armhf`) и 32-битные SDL2/OpenAL/GL/ALSA/X11: часть
 каталога PortMaster собрана под armhf, ядро поддерживает `CONFIG_COMPAT=y`. Если конкретный
 armhf-порт всё равно не стартует, проверьте `/lib/ld-linux-armhf.so.3` и `LD_LIBRARY_PATH`
@@ -688,6 +709,7 @@ power save off, кнопки громкости, калибровка микше
 |Динамик при вставленном jack|молчит (мультиплексор переключается, усилитель остаётся включённым — так и задумано схемой)|
 |Кнопки громкости|`triggerhappy` (thd, под root) → `rg35-volume` → `wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%±`, проверено 0.80 → 0.90 → 0.85|
 |Калибровка|`DAC` 63/63 = 0 дБ — жёсткий потолок. WirePlumber держит `Line Out` (0..31 = −43.5..0 дБ) в соответствии с громкостью sink: 100 % → 31, 80 % → 28, 50 % → 19, 0 % → 0. Дефолт sink 80 % (−1.5 дБ), максимум 100 %|
+|Щелчки в VVVVVV (~3/с)|Pulse-клиент по умолчанию просит квант 128 кадров (2.7 мс), а FAudio/SDL2 миксер игры работает блоками по 1024 кадра. На таком кванте миксер периодически не успевает, и в потоке появляются пропуски|`/etc/pipewire/pipewire.conf.d/50-rg35xx-quantum.conf`: `default.clock.min-quantum = 1024` (21 мс). На живом устройстве то же без перезапуска: `pw-metadata -n settings 0 clock.min-quantum 1024`|
 
 Маршрут сигнала на этой плате: `DAC → Line Out Ramp → усилитель (PI5 + CLDO1) → 74HC4052 (мультиплексор
 динамик/джек)`. Отсюда два вывода, которые и зашиты в патч `9001`: усилитель обязан включаться при
